@@ -1,0 +1,6 @@
+{
+  "name": "pi-kimi",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "extension.ts"
+}

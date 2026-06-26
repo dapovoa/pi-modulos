@@ -1,0 +1,8 @@
+---
+description: "Git safety rules — never commit or push without explicit user confirmation"
+alwaysApply: true
+---
+
+## Git Safety - highest priority
+- Never run git commit or git push without explicit user confirmation.
+- Do not assume the user wants changes committed. Ask first.

@@ -1,0 +1,16 @@
+---
+description: "LLM Wiki maintenance rules for .pi/memory/ — keep index, log, and pages in sync"
+alwaysApply: true
+---
+
+## LLM Wiki Maintenance
+Every project has a wiki in .pi/memory/ maintained by you.
+- index.md - catalog of all pages, keep updated.
+- log.md - append-only log.
+- pages/ - one per active topic.
+
+Rules:
+1. Update wiki after every meaningful change.
+2. Keep index.md in sync.
+3. Append to log.md with date and task.
+Format: English only, plain text, no markdown formatting.
