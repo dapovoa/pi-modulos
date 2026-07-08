@@ -4,7 +4,6 @@ const c0 = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 const t = ["text"] as ("text"|"image")[]
 const ti = ["text", "image"] as ("text"|"image")[]
 
-// Qwen: enable_thinking for reasoning
 const qc = { supportsDeveloperRole: false, maxTokensField: "max_tokens" as const, thinkingFormat: "qwen" as const }
 const qcv = { supportsDeveloperRole: false, maxTokensField: "max_tokens" as const, thinkingFormat: "qwen" as const }
 const nc = { supportsDeveloperRole: false, maxTokensField: "max_tokens" as const }

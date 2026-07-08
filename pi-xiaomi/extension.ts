@@ -1,24 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 
-/**
- * Pi-Xiaomi (Amsterdam) — Xiaomi MiMo Token Plan via Amsterdam endpoint.
- *
- * Overrides the built-in xiaomi-token-plan-ams with explicit prompt caching.
- *
- * Key improvements over the built-in:
- * 1. Registers as "pi-xiaomi" — distinguishable in the model selector
- * 2. Injects prompt_cache_key + prompt_cache_retention into every request
- *    via before_provider_request, enabling explicit server-side caching
- *    (built-in only sends this when PI_CACHE_RETENTION=long is set)
- *
- * Xiaomi Token Plan uses server-side automatic prefix caching
- * (documented as "Input (Cache Hit) Token" vs "Input (missed cache) Token").
- * Sending a consistent prompt_cache_key per session gives the server a
- * stable cache key to work with.
- *
- * Docs: https://platform.xiaomimimo.com/docs/en-US/price/tokenplan
- *       https://platform.xiaomimimo.com/docs/en-US/api/chat/openai-api
- */
 const MODEL_DEFS = [
   {
     id: "mimo-v2.5-pro",
@@ -96,10 +77,6 @@ export default function (pi: ExtensionAPI) {
     models: MODEL_DEFS,
   })
 
-  // Inject prompt cache key/retention into every provider request.
-  // The built-in only does this when PI_CACHE_RETENTION=long is set.
-  // We force it unconditionally so the Xiaomi server can cache the
-  // conversation prefix across turns.
   pi.on("before_provider_request", (event, ctx) => {
     const sessionId = ctx.sessionManager?.getSessionId()
     if (!sessionId) return

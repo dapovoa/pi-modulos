@@ -6,16 +6,6 @@ import { Type } from "typebox"
 import { readFileSync, existsSync } from "node:fs"
 import { extname, join } from "node:path"
 import { homedir } from "node:os"
-
-/**
- * pi-mistral — Mistral chat provider + OCR/FIM tools.
- *
- * Chat: mistral-conversations via pi-ai streamSimpleMistral (SDK nativo).
- * Tools: @mistralai/mistralai (local node_modules, same pattern as pi-cursor).
- *
- * Docs: https://docs.mistral.ai/api
- * Auth: /login → Mistral ($MISTRAL_API_KEY)
- */
 const CHAT_PROVIDER = "mistral"
 const LEGACY_PROVIDER = "pi-mistral"
 const OCR_MODEL = "mistral-ocr-latest"
@@ -73,7 +63,6 @@ function isActiveChatModel(m: ApiModel): boolean {
   if (m.deprecation) return false
   if ("archived" in m && m.archived) return false
   if (!m.capabilities.completionChat) return false
-  // API still serves legacy aliases without deprecation; keep canonical ids only.
   return STATIC_CATALOG.has(m.id)
 }
 
@@ -206,7 +195,6 @@ const NO_KEY_MSG = "API key nao configurada. Usa /login no pi e seleciona Mistra
 export default async function (pi: ExtensionAPI) {
   const models = await resolveProviderModels()
 
-  // Override built-in mistral catalog (full replacement). Avoids duplicate [mistral] + [pi-mistral].
   pi.registerProvider(CHAT_PROVIDER, {
     name: "Pi-Mistral",
     baseUrl: "https://api.mistral.ai",
