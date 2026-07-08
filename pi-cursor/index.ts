@@ -892,16 +892,12 @@ export default async function (pi: ExtensionAPI) {
     const sessionId = getSessionId(ctx, event)
     setSessionCwd(sessionId, ctx?.cwd)
     const cwd = getSessionCwd(sessionId)
-    // Clear compacted flag for this session - new messages mean we can resume
     compactedSessions.delete(sessionId)
-    // Clear stuck agents for this session to allow fresh starts after reload/new
     for (const [key, entry] of activeAgents) {
       if (entry.sessionId === sessionId) {
         stuckAgentIds.delete(entry.agentId)
       }
     }
-    // Clear lastStreamSessionId on new session start to ensure fresh session gets new ID
-    // This handles /reload, /new, and other session restarts properly
     lastStreamSessionId = undefined
     if (!hooksInstalledForCwd.has(cwd)) {
       try { installHooks(cwd); hooksInstalledForCwd.add(cwd) } catch (err) {
@@ -914,10 +910,6 @@ export default async function (pi: ExtensionAPI) {
   })
 
   pi.on("session_shutdown", async (ev?: any) => {
-    // Save agent IDs for resume. Close only on final quit.
-    // Keep stuckAgentIds across internal shutdowns (reload/resume/new/fork)
-    // so we remember bad agent ids and avoid resume after a hang/stop.
-    // Clear compactedSessions on full quit, but keep for reload/resume/new
     const sessionId = getSessionId(ev)
     const scopedSession = hasProvidedSessionId(ev)
     const scopedCwd = getSessionCwd(sessionId)
@@ -941,16 +933,9 @@ export default async function (pi: ExtensionAPI) {
       activeAgents.delete(key)
     }
     if (scopedSession) sessionCwds.delete(sessionId)
-    // Clear compacted flag on full quit
     if (ev?.reason === "quit") compactedSessions.clear()
-    // intentionally do not clear stuckAgentIds here
   })
 
-  // Compaction cooperation (PI core x Cursor SDK):
-  // - mode "pi": keep PI compaction and just reset Cursor SDK state.
-  // - mode "extension": always delegate compaction with summary-only context
-  //   (sentinel firstKeptEntryId). Avoids PI continue() on assistant-tail after
-  //   compact; Cursor SDK SQLite owns real multi-turn context.
   function resetCursorState(sessionId?: string, scopedSession = false) {
     if (_cursorAbort) {
       try { _cursorAbort.abort() } catch {}
@@ -1023,10 +1008,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
     const sk = cwd + "|" + sessionId + "|" + m.id
     let agentEntry: ActiveAgentEntry | undefined
 
-    // Local abort controller with hang protection.
-    // If the Cursor agent loops forever (runaway tool calls, API hang),
-    // the timeout aborts the request and the agent is discarded as stuck.
-    // Merged with pi's external signal and the unhandledRejection guard.
+
     const localAbort = new AbortController()
     _cursorAbort = localAbort
     if (o?.signal) {
@@ -1075,9 +1057,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           ? lastUser.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n")
           : ""
 
-      // pi uses two image formats:
-      // 1. { type: "image", data: base64, mimeType: "image/png" }
-      // 2. { type: "image", source: { type: "base64", media_type, data } }
       const VALID_MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
       images = []
       if (Array.isArray(lastUser?.content)) {
@@ -1110,9 +1089,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       if (!agentEntry) {
         const savedState = loadAgentState(cwd)
         const savedId = savedState.agents[sk]
-        // Never resume an agent that previously hung — it's in a bad state.
-        // Also never resume after compaction — PI context was compacted and no longer
-        // matches Cursor SDK's SQLite history, causing "Cannot continue from message role: assistant".
         const shouldSkipResume = !savedId || stuckAgentIds.has(savedId) || compactedSessions.has(sessionId)
         if (savedId && !shouldSkipResume) {
           try {
@@ -1128,7 +1104,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
             activeAgents.set(sk, agentEntry)
           } catch (err: any) {
             piLog("warn", "Agent resume failed, creating fresh agent:", err?.message || err)
-            // If resume throws, the agent is likely unrecoverable — mark it.
             stuckAgentIds.add(savedId)
           }
         } else if (savedId) {
@@ -1136,14 +1111,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           piLog("warn", "Skipping resume of " + reason + " agent:", savedId.slice(0, 16))
         }
       }
-      // Enforce max idle: if the in-memory agent object sat unused too long,
-      // evict it from the active cache to force a fresh gRPC session on the
-      // next request. The saved agentId on disk is intentionally KEPT so that
-      // Agent.resume(savedId) is called next time, which re-authenticates with
-      // the fresh apiKey and restores the full SQLite conversation history.
-      // This preserves agent memory across gaps between sessions.
-      // (Previously, deleting savedId here caused Agent.create() to be called
-      // instead, creating a fresh agent with no memory of prior conversation.)
       if (agentEntry) {
         const idleMs = Date.now() - agentEntry.lastUsed
         if (idleMs > AGENT_MAX_IDLE_MS) {
@@ -1151,9 +1118,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           try { agentEntry.agent.close() } catch {}
           activeAgents.delete(sk)
           agentEntry = undefined
-          // NOTE: do NOT delete state.agents[sk] from disk — the agentId is
-          // still valid for Agent.resume(). The gRPC auth token may have expired
-          // but Agent.resume() re-authenticates using the fresh apiKey above.
         }
       }
       if (!agentEntry) {
