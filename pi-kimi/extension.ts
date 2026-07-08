@@ -13,7 +13,6 @@ function rEffort(r?: string): string | undefined {
 }
 
 function convertUserContent(c: unknown): unknown {
-  // Convert pi internal image format to OpenAI image_url format
   if (typeof c === "string" || !Array.isArray(c)) return c
   return c.map((b: unknown) => {
     if (!isR(b)) return b
@@ -129,7 +128,6 @@ function sKimi(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): AssistantM
       let tBuf = ""
       let thinking = false
       let fin = false
-      // Accumulate tool calls by index (OpenAI streaming format)
       const tAcc = new Map<number, { id: string; name: string; args: string }>()
 
       const endText = () => {

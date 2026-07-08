@@ -45,8 +45,6 @@ import {
   type Context, type Model, type SimpleStreamOptions,
   calculateCost, createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai"
-
-
 const PLUGIN_DIR = fileURLToPath(new URL(".", import.meta.url))
 const LOG_DIR = join(PLUGIN_DIR, "logs")
 let _logDirReady = false
@@ -74,8 +72,6 @@ function piLog(level: string, message: string, ...args: unknown[]) {
     _logDirReady = false
   }
 }
-
-
 const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07/g
 function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, "")
@@ -95,8 +91,6 @@ const sessionCwds = new Map<string, string>()
 const compactedSessions = new Set<string>()
 let defaultSessionCwd = process.cwd()
 let lastStreamSessionId: string | undefined
-
-
 setInterval(() => {
   for (const agentId of [...stuckAgentIds]) {
     let exists = false
@@ -153,11 +147,7 @@ function inferSessionIdFromContext(ctx?: Context): string | undefined {
   if (!firstUser || typeof firstUser.timestamp !== "number") return undefined
   return `ctx-${firstUser.timestamp}`
 }
-
-
 let _cursorAbort: AbortController | null = null
-
-
 const CRASH_GUARD_COOLDOWN_MS = 5000
 let _crashGuardLastFiredAt = 0
 
@@ -214,11 +204,7 @@ function installCrashGuards() {
   process.on("unhandledRejection", onUnhandledRejection)
   process.on("uncaughtException", onUncaughtException)
 }
-
-
 const AGENT_MAX_IDLE_MS = 8 * 60 * 1000
-
-
 const AGENT_HANG_TIMEOUT_MS = 10 * 60 * 1000
 
 type CompactionMode = "pi" | "extension"
@@ -226,11 +212,7 @@ const COMPACTION_MODE: CompactionMode =
   (process.env.PI_CURSOR_COMPACTION_MODE ?? "pi").toLowerCase() === "pi"
     ? "pi"
     : "extension"
-
-
 const DELEGATED_SUMMARY_ONLY_KEEP_ID = "__pi-cursor-summary-only__"
-
-
 interface CursorParam { id: string; value: string }
 const paramRegistry = new Map<string, { modelId: string; params?: CursorParam[] }>()
 
@@ -387,7 +369,6 @@ function ctxWindow(m: CursorModelEntry, p: CursorParam[]): number {
   const c = p.find(x => x.id === "context")
   if (c) return parseCtxValue(c.value)
 
-  // 2. Try all variants for context param
   for (const v of m.variants ?? []) {
     const cp = v.params.find(x => x.id === "context")
     if (cp) return parseCtxValue(cp.value)
@@ -1007,8 +988,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
     const cwd = getSessionCwd(sessionId)
     const sk = cwd + "|" + sessionId + "|" + m.id
     let agentEntry: ActiveAgentEntry | undefined
-
-
     const localAbort = new AbortController()
     _cursorAbort = localAbort
     if (o?.signal) {
@@ -1151,31 +1130,18 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       st.push({ type: "done", reason: g.stopReason as "stop" | "length" | "toolUse", message: g })
       st.end()
     } catch (error) {
-      // Normalize raw ConnectError from gRPC layer to SDK error types.
-      // The Cursor SDK wraps errors in agent.send() but NOT in run.stream()
-      // async iteration — raw ConnectError (e.g. code 16 Unauthenticated)
-      // can escape from the stream iterator without being typed.
       let sdkErr: any = error
       if (!(error instanceof CursorAgentError)) {
         try { sdkErr = convertConnectError(error as any) } catch { sdkErr = error }
       }
 
-      // Idle timeout: Cursor API session token expires after inactivity.
-      // The agent stored in activeAgents is stale. Clear it and retry once
-      // with a fresh agent so the user doesn't have to re-send manually.
       if (sdkErr instanceof AuthenticationError ||
           (error as any)?.code === 16 /* gRPC Unauthenticated */) {
-        // Evict the stale in-memory agent object only — do NOT delete savedId
-        // from disk yet. The retry block below will attempt Agent.resume(savedId)
-        // first, and only removes savedId if resume is not viable.
         const entry = activeAgents.get(sk)
         if (entry) {
           try { entry.agent.close() } catch {}
           activeAgents.delete(sk)
         }
-        // Auto-retry: session token expired but the SQLite conversation history
-        // is still intact. Try Agent.resume(savedId) first so we keep memory;
-        // only fall back to Agent.create() if resume itself fails.
         const savedIdForRetry = loadAgentState(cwd).agents[sk]
         let retryAgent: any = null
         if (savedIdForRetry && !stuckAgentIds.has(savedIdForRetry)) {
@@ -1192,7 +1158,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         }
         if (!retryAgent) {
           piLog("warn", "Session expired, retrying with fresh Agent.create...")
-          // Only remove savedId from disk when we're certain resume isn't viable
           const st2 = loadAgentState(cwd)
           delete st2.agents[sk]
           saveAgentState(cwd, st2)
@@ -1221,7 +1186,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         }
         g.stopReason = "error"
         g.errorMessage = `Cursor auth error: ${(sdkErr as any).message || (error as any).message}. Session expired and auto-retry failed.`
-        // Evict the fresh agent we just created for retry, since it also failed.
         if (agentEntry) {
           stuckAgentIds.add(agentEntry.agentId)
           try { agentEntry.agent.close() } catch {}
@@ -1233,10 +1197,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         return
       }
 
-      // ENHANCE_YOUR_CALM: HTTP/2 RST_STREAM sent by the Cursor API when
-      // the client is sending too many requests. This is server-side rate
-      // limiting that arrives outside the normal SDK error typing.
-      // Retry with exponential backoff: 2s, then 4s, then give up.
       if (!localAbort.signal.aborted &&
           (error as any)?.code === 13 &&
           /ENHANCE_YOUR_CALM/i.test((error as any)?.message ?? "")) {
@@ -1247,7 +1207,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           activeAgents.delete(sk)
           try { const s = loadAgentState(cwd); delete s.agents[sk]; saveAgentState(cwd, s) } catch {}
         }
-        // Backoff: 2s, then 4s, then 8s (max 3 retries)
         calmRetries++
         const backoffMs = Math.min(2000 * Math.pow(2, calmRetries - 1), 8000)
         if (calmRetries <= 3) {
@@ -1289,7 +1248,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       if (sdkErr instanceof RateLimitError && (sdkErr as any).isRetryable !== false) {
         g.stopReason = "error"
         g.errorMessage = `Cursor rate limited: ${(sdkErr as any).message}`
-        // Evict so next attempt gets a fresh agent instead of re-hitting the bad one.
         if (agentEntry) {
           stuckAgentIds.add(agentEntry.agentId)
           try { agentEntry.agent.close() } catch {}
@@ -1323,7 +1281,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         }
         g.stopReason = "error"
         g.errorMessage = `Cursor agent busy: ${(sdkErr as any).message}. Wait and retry.`
-        // Evict so next attempt gets a fresh agent instead of re-hitting the bad one.
         if (agentEntry) {
           stuckAgentIds.add(agentEntry.agentId)
           try { agentEntry.agent.close() } catch {}
@@ -1360,11 +1317,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
 
       g.stopReason = localAbort.signal.aborted ? "aborted" : "error"
       g.errorMessage = sdkErr instanceof Error ? sdkErr.message : String(sdkErr)
-      // Evict the agent on errors (and on hang aborts) so that after a stop/failure
-      // the next chat message will not reuse the poisoned agent and will instead
-      // create a fresh one (or resume a non-stuck id). Only skip eviction for a
-      // clean external user abort (not our timeout), per previous intent to keep
-      // the agent usable after cancel.
       const isPureUserAbort = localAbort.signal.aborted && agentEntry && !stuckAgentIds.has(agentEntry.agentId)
       if (agentEntry && !isPureUserAbort) {
         stuckAgentIds.add(agentEntry.agentId)
@@ -1387,9 +1339,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
     }
     })
   })().catch((err) => {
-    // Safety net: if an error escapes the try/catch (e.g. from a detached
-    // microtask inside the gRPC stream), prevent it from crashing pi.
-    // Also terminate the stream so the chat consumer does not hang forever.
     piLog("warn", "Unhandled stream error:", err instanceof Error ? err.message : String(err))
     try {
       const eg: any = { role: "assistant", content: [], stopReason: "error", errorMessage: "unhandled: " + (err instanceof Error ? err.message : String(err)), usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, timestamp: Date.now() }
