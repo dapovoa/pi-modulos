@@ -11,7 +11,6 @@ const isR = (v: unknown): v is Record<string, unknown> => typeof v === "object" 
 const S = (v: unknown): string | undefined => typeof v === "string" ? v : undefined
 const N = (v: unknown): number | undefined => typeof v === "number" && Number.isFinite(v) ? v : undefined
 
-// ── Model metadata ──────────────────────────────────────────────
 const noR = new Set(["gpt-5.4-mini"])
 const visionPrefixes = ["anthropic/", "claude-", "gpt-", "google/gemini-"]
 const visionExact = new Set(["moonshotai/Kimi-K2.6", "moonshotai/Kimi-K2.5"])
@@ -43,7 +42,6 @@ async function fetchM(): Promise<M[]> {
   throw new Error("bad format")
 }
 
-// ── Git info (cached, computed once per extension load) ────────
 function exec1(cmd: string): string {
   try { return execSync(cmd, { encoding: "utf8", timeout: 3000, stdio: ["pipe", "pipe", "pipe"] }).trim() } catch { return "" }
 }
@@ -57,7 +55,6 @@ const cachedGit = (() => {
   return { isGitRepo: true, currentBranch: branch, mainBranch: main, gitStatus: status, recentCommits }
 })()
 
-// ── Message conversion (pi format → Command Code custom format) ──
 function ccUserContent(c: unknown): unknown {
   if (typeof c === "string" || !Array.isArray(c)) return c
   return c.map((b: unknown) => {
@@ -101,7 +98,6 @@ function ccMsgs(ms: readonly { role: string; content?: unknown; toolCallId?: str
   }
   if (imgAcc.length) out.push({ role: "user", content: [{ type: "text", text: "[tool results:]" }, ...imgAcc] })
 
-  // Merge consecutive same-role messages
   const merged: unknown[] = []
   for (const m of out) {
     const last = merged[merged.length - 1] as any
@@ -132,7 +128,6 @@ function rEffort(r?: string): string | undefined {
   return m[r]
 }
 
-// ── SSE parsing ────────────────────────────────────────────────
 function parseEvent(l: string): Record<string, unknown> | undefined {
   let t = l.trim()
   if (!t || t.startsWith(":") || t.startsWith("event:")) return
@@ -141,7 +136,6 @@ function parseEvent(l: string): Record<string, unknown> | undefined {
   try { const p = JSON.parse(t); return isR(p) ? p : undefined } catch { return }
 }
 
-// ── Stream handler ──────────────────────────────────────────────
 function streamCC(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): AssistantMessageEventStream {
   const st = createAssistantMessageEventStream()
   ;(async () => {
@@ -170,7 +164,6 @@ function streamCC(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Assista
       const re = rEffort(o?.reasoning)
       if (re) body.reasoning_effort = re
 
-      // Use pi's sessionId as threadId for API-level caching across the session
       const threadId = o?.sessionId ?? crypto.randomUUID()
 
       const r = await fetch(`${API}/alpha/generate`, {
@@ -294,7 +287,6 @@ function streamCC(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Assista
   return st
 }
 
-// ── Extension entry ─────────────────────────────────────────────
 export default async function (pi: ExtensionAPI) {
   const models = await fetchM()
   pi.registerProvider("pi-code", {

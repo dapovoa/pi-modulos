@@ -111,14 +111,12 @@ export default function (pi: ExtensionAPI) {
         const commitModelId = loadCommitModel()
         if (commitModelId) {
           let model = undefined
-          // Try first-slash split (provider/modelId)
           const idx = commitModelId.indexOf("/")
           if (idx > 0) {
             const provider = commitModelId.slice(0, idx)
             const modelId = commitModelId.slice(idx + 1)
             model = ctx.modelRegistry.find(provider, modelId)
           }
-          // Try last-slash split (handles model IDs that contain "/", e.g. pi-code/Qwen/Qwen3.7-Max)
           if (!model) {
             const lastIdx = commitModelId.lastIndexOf("/")
             if (lastIdx > 0 && lastIdx !== idx) {
@@ -136,7 +134,6 @@ export default function (pi: ExtensionAPI) {
           }
         }
         step = 1
-        // Only send the file list, not the full diff
         diffStat = execSync("git diff --staged --stat", { cwd: ctx.cwd, encoding: "utf-8" }).trim()
         pi.sendUserMessage("generate commit message for the changes")
       } catch (e: any) { ctx.ui.notify(e instanceof Error ? e.message.slice(0, 80) : "Not a git repo.") }

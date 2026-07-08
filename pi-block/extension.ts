@@ -5,7 +5,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 const CUSTOM_TYPE = "pi-block-state"
 let blocked = true
 
-// Shared state file for Cursor hooks integration
 function writeStateFile(cwd: string) {
   try {
     const dir = join(cwd, ".pi")

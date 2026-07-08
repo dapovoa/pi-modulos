@@ -404,61 +404,126 @@ interface CursorModelEntry {
   variants?: Array<{ params: Array<{ id: string; value: string }>; isDefault?: boolean }>
 }
 
+function parseCtxValue(value: string): number {
+  if (value.endsWith("m")) return parseInt(value) * 1_000_000
+  if (value.endsWith("k")) return parseInt(value) * 1_000
+  const n = parseInt(value)
+  return isNaN(n) ? 0 : n
+}
+
 function hasVision(m: CursorModelEntry): boolean {
-  const p = new Set(m.parameters?.map(p => p.id) ?? [])
-  if (p.has("thinking") || p.has("reasoning")) return true
-  return ["gemini-", "grok-", "kimi-"].some(pre => m.id.startsWith(pre))
-}
-function hasThinking(m: CursorModelEntry): boolean {
-  return new Set(m.parameters?.map(p => p.id) ?? []).has("thinking") ||
-         new Set(m.parameters?.map(p => p.id) ?? []).has("reasoning")
-}
-function ctxWindow(m: CursorModelEntry, p: CursorParam[]): number {
-  const c = p.find(x => x.id === "context")
-  if (c) {
-    if (c.value.endsWith("m")) return parseInt(c.value) * 1_000_000
-    if (c.value.endsWith("k")) return parseInt(c.value) * 1_000
+  const paramIds = new Set(m.parameters?.map(p => p.id) ?? [])
+  const visionHints = ["thinking", "reasoning", "vision", "image", "multimodal"]
+  for (const hint of visionHints) {
+    if (paramIds.has(hint)) return true
   }
-  if (m.id.startsWith("composer-")) return 1_000_000
-  if (m.id.startsWith("claude-sonnet-") || m.id.startsWith("claude-opus-")) return 1_000_000
-  if (m.id.startsWith("claude-haiku-")) return 200_000
-  if (m.id.startsWith("gpt-") || m.id.startsWith("gemini-") || m.id.startsWith("grok-")) return 1_000_000
+  // Check if any parameter values mention vision
+  for (const param of m.parameters ?? []) {
+    if (param.values?.some(v => /vision|image|multimodal/i.test(v.value))) return true
+  }
+  // Check display name for vision hints
+  if (/vision/i.test(m.displayName)) return true
+  // Broad family prefixes known to support vision
+  return /^(gemini|grok|kimi)-/i.test(m.id)
+}
+
+function hasThinking(m: CursorModelEntry): boolean {
+  const paramIds = new Set(m.parameters?.map(p => p.id) ?? [])
+  return paramIds.has("thinking") || paramIds.has("reasoning")
+}
+
+function ctxWindow(m: CursorModelEntry, p: CursorParam[]): number {
+  // 1. Try default variant params (already passed as p)
+  const c = p.find(x => x.id === "context")
+  if (c) return parseCtxValue(c.value)
+
+  // 2. Try all variants for context param
+  for (const v of m.variants ?? []) {
+    const cp = v.params.find(x => x.id === "context")
+    if (cp) return parseCtxValue(cp.value)
+  }
+
+  // 3. Try parameters enum for context
+  for (const param of m.parameters ?? []) {
+    if (param.id === "context" && param.values?.length) {
+      return parseCtxValue(param.values[0].value)
+    }
+  }
+
+  // 4. Generic fallback — no hardcoded prefix logic
   return 200_000
 }
+
 function maxTok(m: CursorModelEntry): number {
-  if (m.id.includes("nano") || m.id.includes("mini") || m.id.includes("haiku")) return 32_000
+  // 1. Try maxTokens/maxOutput from parameters enum
+  for (const param of m.parameters ?? []) {
+    if (param.id === "maxTokens" || param.id === "maxOutput") {
+      const vals = param.values.map(v => parseInt(v.value)).filter(n => !isNaN(n))
+      if (vals.length > 0) return Math.max(...vals)
+    }
+  }
+
+  // 2. Try from variants' maxTokens param
+  for (const v of m.variants ?? []) {
+    const mp = v.params.find(x => x.id === "maxTokens" || x.id === "maxOutput")
+    if (mp) {
+      const n = parseInt(mp.value)
+      if (!isNaN(n)) return n
+    }
+  }
+
+  // 3. Derive from context window (typically max_tokens <= ctx / 4)
+  const defV = m.variants?.find(v => v.isDefault) ?? m.variants?.[0]
+  const ctx = defV ? parseCtxValue(defV.params.find(p => p.id === "context")?.value ?? "") : 0
+  if (ctx > 0) return Math.min(Math.round(ctx / 4), 128_000)
+
+  // 4. Generic fallback
+  if (/nano|mini|haiku/i.test(m.id)) return 32_000
   return 64_000
 }
 
 // Cost estimates in USD per 1M tokens. Based on Anthropic API pricing
-// (which Cursor mirrors for most models). Falls back to zero when
-// model family is unrecognised — Cursor may have custom pricing.
+// (which Cursor mirrors for most models). Unknown models get a sensible
+// generic estimate instead of $0.
 function modelCost(id: string): { input: number; output: number; cacheRead: number; cacheWrite: number } {
   if (id.startsWith("claude-opus-")) return { input: 15, output: 75, cacheRead: 1.50, cacheWrite: 18.75 }
   if (id.startsWith("claude-sonnet-")) return { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75 }
   if (id.startsWith("claude-haiku-")) return { input: 0.80, output: 4, cacheRead: 0.08, cacheWrite: 1 }
   if (id.startsWith("composer-")) return { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75 }
-  // GPT / Gemini / Grok — Cursor pricing is opaque; leave zero until known
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+  // GPT / Gemini / Grok — Cursor pricing is opaque; best-effort estimates
+  if (id.startsWith("gpt-")) return { input: 2.50, output: 10, cacheRead: 0.50, cacheWrite: 1.25 }
+  if (id.startsWith("gemini-")) return { input: 1.25, output: 5, cacheRead: 0.10, cacheWrite: 0.30 }
+  if (id.startsWith("grok-")) return { input: 2, output: 10, cacheRead: 0.20, cacheWrite: 0.50 }
+  // Generic estimate for any model Cursor adds in the future
+  return { input: 2, output: 10, cacheRead: 0.20, cacheWrite: 0.50 }
+}
+
+const THINKING_EFFORT_MAP: Record<string, string> = {
+  minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh",
+}
+const REASONING_EFFORT_MAP: Record<string, string> = {
+  minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "extra-high",
 }
 
 function applyThinking(pid: string, def: CursorParam[], lvl?: string): CursorParam[] {
   if (!lvl) return def
-  if (pid.startsWith("claude-")) {
-    if (!def.some(p => p.id === "thinking")) return def
-    const m: Record<string, string> = { minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh" }
+  // Detect which param the model supports (thinking or reasoning) from default params
+  const mode = def.some(p => p.id === "thinking") ? "thinking" :
+               def.some(p => p.id === "reasoning") ? "reasoning" : null
+  if (!mode) return def
+
+  if (mode === "thinking") {
     return def.map(p => {
       if (p.id === "thinking") return { id: "thinking", value: "true" }
-      if (p.id === "effort") return { id: "effort", value: m[lvl] || "medium" }
+      if (p.id === "effort") return { id: "effort", value: THINKING_EFFORT_MAP[lvl] || "medium" }
       return p
     })
   }
-  if (pid.startsWith("gpt-")) {
-    if (!def.some(p => p.id === "reasoning")) return def
-    const m: Record<string, string> = { minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "extra-high" }
-    return def.map(p => p.id === "reasoning" ? { id: "reasoning", value: m[lvl] || "medium" } : p)
-  }
-  return def
+
+  // mode === "reasoning"
+  return def.map(p =>
+    p.id === "reasoning" ? { id: "reasoning", value: REASONING_EFFORT_MAP[lvl] || "medium" } : p
+  )
 }
 
 const SDK_OUTPUT_NOISE = /Working\.\.\.|LocalCursorRulesService|AgentSkillsCursorRulesService|CursorPluginsAgentSkillsService|load completed(?:\s+meta=|\b)|\d{2}:\d{2}:\d{2}\.\d{3}\s+INFO\s|\[shell-exec\]|[\u2800-\u28FF]/
@@ -665,7 +730,10 @@ function applyRunResult(result: any, state: DeltaStreamState) {
     state.st.push({ type: "text_delta", contentIndex: state.textIdx, delta: result.result, partial: state.g })
     state.st.push({ type: "text_end", contentIndex: state.textIdx, content: result.result, partial: state.g })
   }
-  state.g.stopReason = result.status === "finished" ? "stop" : "length"
+  state.g.stopReason = result?.status === "finished" ? "stop" : "length"
+  if (state.g.stopReason === "length") {
+    piLog("warn", "Run ended with non-finished status:", result?.status, "— response may be truncated")
+  }
 }
 
 function makeAbortRej(abort: AbortController): Promise<never> {
@@ -684,6 +752,12 @@ function createRecoveryAbort(o?: SimpleStreamOptions): AbortController {
   }
   return recoveryAbort
 }
+
+// Max automatic continuation cycles when the model hits its output token limit.
+// Each cycle sends an empty "continue" to the same agent and appends the result.
+// This transparently recovers from truncated responses without user intervention.
+// Set to 0 to disable auto-continuation.
+const MAX_OUTPUT_CONTINUATIONS = 3
 
 async function executeSendCycle(args: {
   agent: any
@@ -707,12 +781,53 @@ async function executeSendCycle(args: {
     state.st.push({ type: "text_end", contentIndex: state.textIdx, content: state.textAcc, partial: state.g })
   }
   if (state.localAbort.signal.aborted) throw new Error("aborted")
+  let result: any
   try {
-    return await Promise.race([waitForRunResult(run, state.localAbort.signal), abortRej])
+    result = await Promise.race([waitForRunResult(run, state.localAbort.signal), abortRej])
   } catch (e) {
     if (state.localAbort.signal.aborted) throw e
     return undefined
   }
+
+  // Auto-continuation: if the model stopped because it hit its output token
+  // limit (result.status !== "finished"), re-send with an empty continuation
+  // so the response is transparently completed. Cap at MAX_OUTPUT_CONTINUATIONS
+  // to avoid infinite loops.
+  let continuations = 0
+  while (
+    result?.status !== "finished" &&
+    result?.status !== "cancelled" &&
+    continuations < MAX_OUTPUT_CONTINUATIONS &&
+    !state.localAbort.signal.aborted
+  ) {
+    piLog("warn", `Output token limit hit (status=${result?.status}), continuation ${continuations + 1}/${MAX_OUTPUT_CONTINUATIONS}...`)
+    continuations++
+    // Reset only the text accumulator so we append — do NOT reset usage or content array
+    state.textAcc = ""
+    const contRun = await Promise.race([
+      agent.send("", buildSendOptions(modelSel, state, false)),
+      abortRej,
+    ])
+    await consumeRunStream(contRun, state)
+    if (state.textIdx >= 0 && state.textAcc) {
+      state.st.push({ type: "text_end", contentIndex: state.textIdx, content: state.textAcc, partial: state.g })
+    }
+    if (state.localAbort.signal.aborted) throw new Error("aborted")
+    try {
+      result = await Promise.race([waitForRunResult(contRun, state.localAbort.signal), abortRej])
+    } catch (e) {
+      if (state.localAbort.signal.aborted) throw e
+      result = undefined
+      break
+    }
+  }
+  if (continuations > 0 && result?.status === "finished") {
+    piLog("info", `Output continuation completed after ${continuations} extra cycle(s)`)
+  } else if (continuations >= MAX_OUTPUT_CONTINUATIONS && result?.status !== "finished") {
+    piLog("warn", `Output still truncated after ${continuations} continuation(s) — returning as-is`)
+  }
+
+  return result
 }
 
 // SDK silence: suppress console.* and filter process.stderr.write during
@@ -1107,22 +1222,24 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           piLog("warn", "Skipping resume of " + reason + " agent:", savedId.slice(0, 16))
         }
       }
-      // Enforce max idle: if agent sat unused too long, discard it.
-      // Prevents the stale-session-token ConnectError from ever firing.
+      // Enforce max idle: if the in-memory agent object sat unused too long,
+      // evict it from the active cache to force a fresh gRPC session on the
+      // next request. The saved agentId on disk is intentionally KEPT so that
+      // Agent.resume(savedId) is called next time, which re-authenticates with
+      // the fresh apiKey and restores the full SQLite conversation history.
+      // This preserves agent memory across gaps between sessions.
+      // (Previously, deleting savedId here caused Agent.create() to be called
+      // instead, creating a fresh agent with no memory of prior conversation.)
       if (agentEntry) {
         const idleMs = Date.now() - agentEntry.lastUsed
         if (idleMs > AGENT_MAX_IDLE_MS) {
-          piLog("info", "Agent idle-expired after " + Math.round(idleMs / 1000) + "s, creating fresh agent")
+          piLog("info", "Agent idle-expired after " + Math.round(idleMs / 1000) + "s, will resume on next message")
           try { agentEntry.agent.close() } catch {}
           activeAgents.delete(sk)
-          const state = loadAgentState(cwd)
-          delete state.agents[sk]
-          saveAgentState(cwd, state)
           agentEntry = undefined
-          // NOTE: do NOT clear lastStreamSessionId here — the session ID is
-          // still valid; only the Cursor agent token expired. The next message
-          // will create a fresh agent under the same session key (sk) so
-          // conversation continuity is preserved.
+          // NOTE: do NOT delete state.agents[sk] from disk — the agentId is
+          // still valid for Agent.resume(). The gRPC auth token may have expired
+          // but Agent.resume() re-authenticates using the fresh apiKey above.
         }
       }
       if (!agentEntry) {
@@ -1170,25 +1287,51 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       // with a fresh agent so the user doesn't have to re-send manually.
       if (sdkErr instanceof AuthenticationError ||
           (error as any)?.code === 16 /* gRPC Unauthenticated */) {
+        // Evict the stale in-memory agent object only — do NOT delete savedId
+        // from disk yet. The retry block below will attempt Agent.resume(savedId)
+        // first, and only removes savedId if resume is not viable.
         const entry = activeAgents.get(sk)
         if (entry) {
           try { entry.agent.close() } catch {}
           activeAgents.delete(sk)
-          const state = loadAgentState(cwd)
-          delete state.agents[sk]
-          saveAgentState(cwd, state)
         }
-        // Auto-retry: create a fresh agent and re-run the send.
-        // This recovers transparently from idle session expiry.
+        // Auto-retry: session token expired but the SQLite conversation history
+        // is still intact. Try Agent.resume(savedId) first so we keep memory;
+        // only fall back to Agent.create() if resume itself fails.
+        const savedIdForRetry = loadAgentState(cwd).agents[sk]
+        let retryAgent: any = null
+        if (savedIdForRetry && !stuckAgentIds.has(savedIdForRetry)) {
+          try {
+            piLog("warn", "Session expired, retrying with Agent.resume (preserve memory)...")
+            retryAgent = await Agent.resume(savedIdForRetry, { apiKey, local: { cwd, settingSources: ["project"] } })
+            agentEntry = { agent: retryAgent, agentId: savedIdForRetry, lastUsed: Date.now(), cwd, sessionId }
+            activeAgents.set(sk, agentEntry)
+          } catch (resumeErr: any) {
+            piLog("warn", "Resume also failed, falling back to fresh agent:", resumeErr?.message || resumeErr)
+            stuckAgentIds.add(savedIdForRetry)
+            retryAgent = null
+          }
+        }
+        if (!retryAgent) {
+          piLog("warn", "Session expired, retrying with fresh Agent.create...")
+          // Only remove savedId from disk when we're certain resume isn't viable
+          const st2 = loadAgentState(cwd)
+          delete st2.agents[sk]
+          saveAgentState(cwd, st2)
+          try {
+            retryAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
+            agentEntry = { agent: retryAgent, agentId: retryAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
+            activeAgents.set(sk, agentEntry)
+          } catch (createErr: any) {
+            piLog("warn", "Agent.create also failed:", createErr?.message || createErr)
+          }
+        }
         try {
-          piLog("warn", "Session expired, auto-retrying with fresh agent...")
-          const newAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
-          agentEntry = { agent: newAgent, agentId: newAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
-          activeAgents.set(sk, agentEntry)
+          if (!retryAgent) throw new Error("no agent available for retry")
           resetDeltaStreamState(deltaState)
           st.push({ type: "start", partial: g })
           const retryResult = await executeSendCycle({
-            agent: newAgent, text, images, modelSel, state: deltaState, abortRej,
+            agent: retryAgent, text, images, modelSel, state: deltaState, abortRej,
           })
           applyRunResult(retryResult, deltaState)
           if (localAbort.signal.aborted) throw new Error("aborted")
