@@ -46,19 +46,14 @@ import {
   calculateCost, createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai"
 
-// ── pi-cursor internal logger ──────────────────────────────────────────────
-// All diagnostic output from pi-cursor routes here instead of console/stderr.
-// Logs rotate daily (pi-cursor-YYYY-MM-DD.log) inside the plugin's logs/ dir.
-// Extensible: log level prefix + ISO timestamp makes it easy to grep, slice,
-// and add categories (session, compaction, sdk, etc.) in the future.
+
 const PLUGIN_DIR = fileURLToPath(new URL(".", import.meta.url))
 const LOG_DIR = join(PLUGIN_DIR, "logs")
 let _logDirReady = false
 function ensureLogDir() {
   if (_logDirReady) return
   try { mkdirSync(LOG_DIR, { recursive: true }); _logDirReady = true } catch {
-    // Directory creation failed — piLog will be a no-op. We can't log this anywhere
-    // because the whole point is that console is unreliable during SDK silence.
+    
   }
 }
 function piLog(level: string, message: string, ...args: unknown[]) {
@@ -76,19 +71,15 @@ function piLog(level: string, message: string, ...args: unknown[]) {
   try {
     appendFileSync(join(LOG_DIR, `pi-cursor-${dateStr}.log`), line, { flag: "a" })
   } catch {
-    // If we can't write the log, mark dir as broken so we stop trying
     _logDirReady = false
   }
 }
 
-// Strip ANSI escape sequences from shell output so they don't appear
-// as garbage characters in the thinking block display.
+
 const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07/g
 function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, "")
 }
-// ──────────────────────────────────────────────────────────────────────────
-
 type ActiveAgentEntry = {
   agent: any
   agentId: string
@@ -105,8 +96,7 @@ const compactedSessions = new Set<string>()
 let defaultSessionCwd = process.cwd()
 let lastStreamSessionId: string | undefined
 
-// Cleanup stuckAgentIds periodically to avoid permanent blocking
-// Remove agent IDs that are no longer in activeAgents (agents were closed/cleaned up)
+
 setInterval(() => {
   for (const agentId of [...stuckAgentIds]) {
     let exists = false
@@ -118,7 +108,7 @@ setInterval(() => {
     }
     if (!exists) stuckAgentIds.delete(agentId)
   }
-}, 30 * 60 * 1000)  // 30 minutes
+}, 30 * 60 * 1000)
 
 function providedSessionId(...sources: any[]): string | undefined {
   for (const source of sources) {
@@ -135,10 +125,7 @@ function providedSessionId(...sources: any[]): string | undefined {
 function getSessionId(...sources: any[]): string {
   const provided = providedSessionId(...sources)
   if (provided) return provided
-  // If we have a lastStreamSessionId from a previous call in this session, use it
-  // This maintains session continuity across multiple messages in the same chat
   if (lastStreamSessionId) return lastStreamSessionId
-  // Only generate a new UUID for the very first message of a new session
   const newId = `session-${randomUUID().slice(0, 8)}`
   return newId
 }
@@ -167,39 +154,19 @@ function inferSessionIdFromContext(ctx?: Context): string | undefined {
   return `ctx-${firstUser.timestamp}`
 }
 
-// Shared abort controller: when crash guards catch a gRPC/stream error,
-// it MUST abort the current cursorStream operation. Without this, the
-// for-await loop on run.stream() hangs forever because the stream is broken
-// but nobody tells it to stop. This is the root cause of pi-cursor freezes.
+
 let _cursorAbort: AbortController | null = null
 
-// Crash guard cooldown: after the guard fires once, stale gRPC rejections
-// from the same dead connection can arrive for several seconds. Without a
-// cooldown, each stale rejection kills the retry stream that pi starts
-// immediately after the first abort — producing cascading "Operation aborted".
-//
-// Two defences:
-//   1. Cooldown (CRASH_GUARD_COOLDOWN_MS): ignore subsequent guard fires for
-//      N ms after the first, giving pi's retry time to get past the bad window.
-//   2. Identity check: capture the _cursorAbort reference at rejection time;
-//      only abort if it hasn't been replaced by a fresh stream by the time
-//      we actually call .abort(). Prevents a stale rejection from killing
-//      a brand-new stream that started in the same event-loop turn.
-const CRASH_GUARD_COOLDOWN_MS = 5000 // 5 s — matches typical gRPC RST cascade window
+
+const CRASH_GUARD_COOLDOWN_MS = 5000
 let _crashGuardLastFiredAt = 0
 
 const CURSOR_CRASH_TAG = "[pi-cursor-crash-guard]"
 
 function installCrashGuards() {
-  // Guard against duplicates across /reload: check if our listener is already registered.
-  // Module-local flags reset on jiti reload, but process listeners persist.
   const existing = process.listeners("unhandledRejection") as Array<(...a: unknown[]) => void>
   if (existing.some(fn => (fn as any)._piCursorTag === CURSOR_CRASH_TAG)) return
 
-  // Cursor SDK uses @connectrpc/connect-node (gRPC over HTTP/2).
-  // Server-initiated RST_STREAM (ENHANCE_YOUR_CALM, UNAUTHENTICATED, etc.)
-  // can surface as unhandledRejection (promise reject) OR uncaughtException
-  // (stream error event without listener). We guard both to prevent pi crashes.
   const isCursorError = (reason: any): boolean => {
     const msg = reason instanceof Error ? reason.message : String(reason)
     if (reason?.code === 16 || reason?.code === 13) return true
@@ -210,17 +177,11 @@ function installCrashGuards() {
   }
 
   function guardedAbort(label: string, errMsg: string) {
-    // Defence 1 — cooldown: if the guard fired very recently, this is almost
-    // certainly a stale rejection cascading from the same dead gRPC socket.
-    // Ignore it so we don't kill the retry stream pi just started.
     const now = Date.now()
     if (now - _crashGuardLastFiredAt < CRASH_GUARD_COOLDOWN_MS) {
       piLog("warn", label + " ignored (cooldown active, stale gRPC cascade):", errMsg)
       return
     }
-    // Defence 2 — identity check: capture the controller reference now.
-    // If _cursorAbort was already replaced by a new stream's controller,
-    // the captured reference won't match and we skip the abort.
     const captured = _cursorAbort
     if (!captured || captured.signal.aborted) return
     _crashGuardLastFiredAt = now
@@ -229,7 +190,6 @@ function installCrashGuards() {
     if (_cursorAbort === captured) _cursorAbort = null
   }
 
-  // Tagged listener wrappers so we can detect duplicates on /reload
   const onUnhandledRejection = (reason: any) => {
     if (!isCursorError(reason)) {
       piLog("error", "Unhandled rejection (non-Cursor):", reason)
@@ -255,15 +215,11 @@ function installCrashGuards() {
   process.on("uncaughtException", onUncaughtException)
 }
 
-// Max agent idle time before forcing a fresh agent (prevents session expiry).
-// Cursor API sessions expire after ~10-15 min of inactivity.
-const AGENT_MAX_IDLE_MS = 8 * 60 * 1000 // 8 minutes
 
-// Max time for a single agent.send() + stream + wait() cycle.
-// If the agent hasn't produced a final response by then, it's considered
-// stuck. The agent is discarded and a fresh one is created.
-// Prevents infinite hangs from runaway tool-call loops or API timeouts.
-const AGENT_HANG_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
+const AGENT_MAX_IDLE_MS = 8 * 60 * 1000
+
+
+const AGENT_HANG_TIMEOUT_MS = 10 * 60 * 1000
 
 type CompactionMode = "pi" | "extension"
 const COMPACTION_MODE: CompactionMode =
@@ -271,10 +227,7 @@ const COMPACTION_MODE: CompactionMode =
     ? "pi"
     : "extension"
 
-// Sentinel firstKeptEntryId: never matches a session entry, so buildSessionContext()
-// emits only the compaction summary (role compactionSummary). PI core can then
-// continue/retry without hitting "Cannot continue from message role: assistant".
-// Cursor SDK keeps full conversation in local SQLite; PI context is display-only here.
+
 const DELEGATED_SUMMARY_ONLY_KEEP_ID = "__pi-cursor-summary-only__"
 
 
@@ -417,13 +370,10 @@ function hasVision(m: CursorModelEntry): boolean {
   for (const hint of visionHints) {
     if (paramIds.has(hint)) return true
   }
-  // Check if any parameter values mention vision
   for (const param of m.parameters ?? []) {
     if (param.values?.some(v => /vision|image|multimodal/i.test(v.value))) return true
   }
-  // Check display name for vision hints
   if (/vision/i.test(m.displayName)) return true
-  // Broad family prefixes known to support vision
   return /^(gemini|grok|kimi)-/i.test(m.id)
 }
 
@@ -443,19 +393,16 @@ function ctxWindow(m: CursorModelEntry, p: CursorParam[]): number {
     if (cp) return parseCtxValue(cp.value)
   }
 
-  // 3. Try parameters enum for context
   for (const param of m.parameters ?? []) {
     if (param.id === "context" && param.values?.length) {
       return parseCtxValue(param.values[0].value)
     }
   }
 
-  // 4. Generic fallback — no hardcoded prefix logic
   return 200_000
 }
 
 function maxTok(m: CursorModelEntry): number {
-  // 1. Try maxTokens/maxOutput from parameters enum
   for (const param of m.parameters ?? []) {
     if (param.id === "maxTokens" || param.id === "maxOutput") {
       const vals = param.values.map(v => parseInt(v.value)).filter(n => !isNaN(n))
@@ -463,7 +410,6 @@ function maxTok(m: CursorModelEntry): number {
     }
   }
 
-  // 2. Try from variants' maxTokens param
   for (const v of m.variants ?? []) {
     const mp = v.params.find(x => x.id === "maxTokens" || x.id === "maxOutput")
     if (mp) {
@@ -472,29 +418,22 @@ function maxTok(m: CursorModelEntry): number {
     }
   }
 
-  // 3. Derive from context window (typically max_tokens <= ctx / 4)
   const defV = m.variants?.find(v => v.isDefault) ?? m.variants?.[0]
   const ctx = defV ? parseCtxValue(defV.params.find(p => p.id === "context")?.value ?? "") : 0
   if (ctx > 0) return Math.min(Math.round(ctx / 4), 128_000)
 
-  // 4. Generic fallback
   if (/nano|mini|haiku/i.test(m.id)) return 32_000
   return 64_000
 }
 
-// Cost estimates in USD per 1M tokens. Based on Anthropic API pricing
-// (which Cursor mirrors for most models). Unknown models get a sensible
-// generic estimate instead of $0.
 function modelCost(id: string): { input: number; output: number; cacheRead: number; cacheWrite: number } {
   if (id.startsWith("claude-opus-")) return { input: 15, output: 75, cacheRead: 1.50, cacheWrite: 18.75 }
   if (id.startsWith("claude-sonnet-")) return { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75 }
   if (id.startsWith("claude-haiku-")) return { input: 0.80, output: 4, cacheRead: 0.08, cacheWrite: 1 }
   if (id.startsWith("composer-")) return { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75 }
-  // GPT / Gemini / Grok — Cursor pricing is opaque; best-effort estimates
   if (id.startsWith("gpt-")) return { input: 2.50, output: 10, cacheRead: 0.50, cacheWrite: 1.25 }
   if (id.startsWith("gemini-")) return { input: 1.25, output: 5, cacheRead: 0.10, cacheWrite: 0.30 }
   if (id.startsWith("grok-")) return { input: 2, output: 10, cacheRead: 0.20, cacheWrite: 0.50 }
-  // Generic estimate for any model Cursor adds in the future
   return { input: 2, output: 10, cacheRead: 0.20, cacheWrite: 0.50 }
 }
 
@@ -507,7 +446,6 @@ const REASONING_EFFORT_MAP: Record<string, string> = {
 
 function applyThinking(pid: string, def: CursorParam[], lvl?: string): CursorParam[] {
   if (!lvl) return def
-  // Detect which param the model supports (thinking or reasoning) from default params
   const mode = def.some(p => p.id === "thinking") ? "thinking" :
                def.some(p => p.id === "reasoning") ? "reasoning" : null
   if (!mode) return def
@@ -520,7 +458,6 @@ function applyThinking(pid: string, def: CursorParam[], lvl?: string): CursorPar
     })
   }
 
-  // mode === "reasoning"
   return def.map(p =>
     p.id === "reasoning" ? { id: "reasoning", value: REASONING_EFFORT_MAP[lvl] || "medium" } : p
   )
@@ -558,8 +495,6 @@ function applyTurnUsage(
   billing.cacheRead += u.cacheReadTokens
   billing.cacheWrite += u.cacheWriteTokens
 
-  // Cursor turn-ended input/cache are per-turn context totals, not deltas.
-  // PI auto-compaction reads assistant usage; only the last turn reflects real context size.
   state.g.usage.input = u.inputTokens
   state.g.usage.cacheRead = u.cacheReadTokens
   state.g.usage.cacheWrite = u.cacheWriteTokens
@@ -753,10 +688,6 @@ function createRecoveryAbort(o?: SimpleStreamOptions): AbortController {
   return recoveryAbort
 }
 
-// Max automatic continuation cycles when the model hits its output token limit.
-// Each cycle sends an empty "continue" to the same agent and appends the result.
-// This transparently recovers from truncated responses without user intervention.
-// Set to 0 to disable auto-continuation.
 const MAX_OUTPUT_CONTINUATIONS = 3
 
 async function executeSendCycle(args: {
@@ -789,10 +720,6 @@ async function executeSendCycle(args: {
     return undefined
   }
 
-  // Auto-continuation: if the model stopped because it hit its output token
-  // limit (result.status !== "finished"), re-send with an empty continuation
-  // so the response is transparently completed. Cap at MAX_OUTPUT_CONTINUATIONS
-  // to avoid infinite loops.
   let continuations = 0
   while (
     result?.status !== "finished" &&
@@ -802,7 +729,6 @@ async function executeSendCycle(args: {
   ) {
     piLog("warn", `Output token limit hit (status=${result?.status}), continuation ${continuations + 1}/${MAX_OUTPUT_CONTINUATIONS}...`)
     continuations++
-    // Reset only the text accumulator so we append — do NOT reset usage or content array
     state.textAcc = ""
     const contRun = await Promise.race([
       agent.send("", buildSendOptions(modelSel, state, false)),
@@ -830,11 +756,6 @@ async function executeSendCycle(args: {
   return result
 }
 
-// SDK silence: suppress console.* and filter process.stderr.write during
-// Cursor SDK operations to remove SDK diagnostic noise from the terminal.
-// process.stdout.write is intentionally NOT touched — the pi CLI uses it
-// for Ink/readline terminal rendering; suppressing it causes chat freezes.
-// pi-cursor's own diagnostics go to piLog() (file-based) so nothing is lost.
 function isSdkConsoleNoise(args: unknown[]): boolean {
   return isSdkOutputNoise(args.map(a => typeof a === "string" ? a : String(a)).join(" "))
 }
@@ -885,13 +806,6 @@ async function withSilencedSdk<T>(fn: () => Promise<T>): Promise<T> {
   finally { exitSdkSilence() }
 }
 
-// pi behavioural rules injected as .cursor/rules/*.mdc files.
-// Cursor loads project rules via settingSources: ["project"], placing
-// them in the system prompt — which Anthropic caches across turns.
-// This is critical: rules in the system prompt benefit from prompt
-// caching (cache writes on first turn, cache reads thereafter).
-// Rules injected into the user message would NEVER be cached because
-// user text is unique per turn.
 const rulesDir = join(fileURLToPath(new URL(".", import.meta.url)), "rules")
 
 function ensureCursorRules(cwd: string) {
