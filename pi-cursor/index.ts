@@ -645,6 +645,12 @@ function resetDeltaStreamState(state: DeltaStreamState) {
   state.usageBilling = null
 }
 
+function hasThinkingOrToolOutput(state: DeltaStreamState): boolean {
+  return state.g.content.some(
+    c => c.type === "thinking" && (c as any).thinking?.trim().length > 0
+  )
+}
+
 function applyRunResult(result: any, state: DeltaStreamState) {
   if (!result) return
   if (result.status === "context_exhausted") {
@@ -659,12 +665,9 @@ function applyRunResult(result: any, state: DeltaStreamState) {
     state.st.push({ type: "text_delta", contentIndex: state.textIdx, delta: result.result, partial: state.g })
     state.st.push({ type: "text_end", contentIndex: state.textIdx, content: result.result, partial: state.g })
   }
-  // Se ja temos texto visivel, a resposta esta completa — o loop de continuacao
-  // acima (agent.send("")) ja tentou extrair mais output e nao conseguiu.
-  // Forcar "stop" evita o falso positivo "Model stopped because it reached
-  // the maximum output token limit" no pi-core + auto-compaction desnecessaria.
   const hasOutput = state.textIdx >= 0 && state.textAcc.trim().length > 0
-  if (result?.status === "finished" || hasOutput) {
+  const hasToolWork = hasThinkingOrToolOutput(state)
+  if (result?.status === "finished" || hasOutput || hasToolWork) {
     state.g.stopReason = "stop"
   } else {
     state.g.stopReason = "length"
@@ -727,10 +730,12 @@ async function executeSendCycle(args: {
   if (result?.status === "error") {
     piLog("warn", "Agent returned status=error — attempting continuation to recover partial output...")
   }
+  const toolWorkDone = hasThinkingOrToolOutput(state)
   let continuations = 0
   while (
     result?.status !== "finished" &&
     result?.status !== "cancelled" &&
+    !toolWorkDone &&
     continuations < MAX_OUTPUT_CONTINUATIONS &&
     !state.localAbort.signal.aborted
   ) {
@@ -1235,7 +1240,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       })
       applyRunResult(result, deltaState)
 
-      if (result?.status === "error" && agentEntry) {
+      if (result?.status === "error" && agentEntry && !hasThinkingOrToolOutput(deltaState)) {
         piLog("warn", "Agent error: evicting agent", agentEntry.agentId.slice(0, 16), "so next message creates fresh agent")
         evictAgent(sk, cwd, agentEntry)
       }
