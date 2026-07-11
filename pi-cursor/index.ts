@@ -34,7 +34,7 @@
  */
 
 import { execSync } from "node:child_process"
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs"
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -45,6 +45,7 @@ import {
   type Context, type Model, type SimpleStreamOptions,
   calculateCost, createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai"
+import type { SDKAgent as CursorSdkAgent } from "@cursor/sdk"
 const PLUGIN_DIR = fileURLToPath(new URL(".", import.meta.url))
 const LOG_DIR = join(PLUGIN_DIR, "logs")
 let _logDirReady = false
@@ -77,7 +78,7 @@ function stripAnsi(text: string): string {
   return text.replace(ANSI_RE, "")
 }
 type ActiveAgentEntry = {
-  agent: any
+  agent: CursorSdkAgent
   agentId: string
   lastUsed: number
   cwd: string
@@ -91,7 +92,7 @@ const sessionCwds = new Map<string, string>()
 const compactedSessions = new Set<string>()
 let defaultSessionCwd = process.cwd()
 let lastStreamSessionId: string | undefined
-setInterval(() => {
+const _stuckCleanupInterval = setInterval(() => {
   for (const agentId of [...stuckAgentIds]) {
     let exists = false
     for (const [, entry] of activeAgents) {
@@ -159,9 +160,8 @@ function installCrashGuards() {
 
   const isCursorError = (reason: any): boolean => {
     const msg = reason instanceof Error ? reason.message : String(reason)
-    if (reason?.code === 16 || reason?.code === 13) return true
-    if (msg.includes("unauthenticated") || msg.includes("ConnectError") ||
-        msg.includes("ENHANCE_YOUR_CALM") || msg.includes("Stream closed")) return true
+    if (reason?.code === 16 || reason?.code === 13 || reason?.code === 14) return true
+    if (/unauthenticated|ConnectError|ENHANCE_YOUR_CALM|Stream closed|unavailable|ETIMEDOUT|ECONNRESET/i.test(msg)) return true
     if (reason?.details?.some?.((d: any) => d.type?.includes("aiserver"))) return true
     return false
   }
@@ -348,7 +348,7 @@ function parseCtxValue(value: string): number {
 
 function hasVision(m: CursorModelEntry): boolean {
   const paramIds = new Set(m.parameters?.map(p => p.id) ?? [])
-  const visionHints = ["thinking", "reasoning", "vision", "image", "multimodal"]
+  const visionHints = ["vision", "image", "multimodal"]
   for (const hint of visionHints) {
     if (paramIds.has(hint)) return true
   }
@@ -356,7 +356,8 @@ function hasVision(m: CursorModelEntry): boolean {
     if (param.values?.some(v => /vision|image|multimodal/i.test(v.value))) return true
   }
   if (/vision/i.test(m.displayName)) return true
-  return /^(gemini|grok|kimi)-/i.test(m.id)
+  // Claude models all support vision; also gemini, grok, kimi
+  return /^(gemini|grok|kimi|claude-)/i.test(m.id)
 }
 
 function hasThinking(m: CursorModelEntry): boolean {
@@ -407,6 +408,8 @@ function maxTok(m: CursorModelEntry): number {
   return 64_000
 }
 
+// NOTE: Prices are hardcoded per model prefix. Update when Cursor changes pricing.
+// Cursor SDK model list does not expose pricing fields.
 function modelCost(id: string): { input: number; output: number; cacheRead: number; cacheWrite: number } {
   if (id.startsWith("claude-opus-")) return { input: 15, output: 75, cacheRead: 1.50, cacheWrite: 18.75 }
   if (id.startsWith("claude-sonnet-")) return { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75 }
@@ -452,6 +455,11 @@ function isSdkOutputNoise(text: string): boolean {
 
 type UsageBilling = { input: number; output: number; cacheRead: number; cacheWrite: number }
 
+const ZERO_USAGE = {
+  input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+} as const
+
 type DeltaStreamState = {
   g: AssistantMessage
   st: AssistantMessageEventStream
@@ -461,6 +469,7 @@ type DeltaStreamState = {
   activeToolCalls: Map<string, string>
   usageBilling: UsageBilling | null
   localAbort: AbortController
+  resetHangTimer?: () => void
 }
 
 function applyTurnUsage(
@@ -476,11 +485,12 @@ function applyTurnUsage(
   billing.cacheRead += u.cacheReadTokens
   billing.cacheWrite += u.cacheWriteTokens
 
-  state.g.usage.input = u.inputTokens
-  state.g.usage.cacheRead = u.cacheReadTokens
-  state.g.usage.cacheWrite = u.cacheWriteTokens
+  // Use accumulated values so pi core gets correct context token count across multi-turn sends
+  state.g.usage.input = billing.input
+  state.g.usage.cacheRead = billing.cacheRead
+  state.g.usage.cacheWrite = billing.cacheWrite
   state.g.usage.output = billing.output
-  state.g.usage.totalTokens = u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens + billing.output
+  state.g.usage.totalTokens = billing.input + billing.output + billing.cacheRead + billing.cacheWrite
 
   const billingUsage = {
     ...billing,
@@ -520,6 +530,7 @@ function appendThinkingDelta(state: DeltaStreamState, text: string) {
 
 function handleInteractionUpdate(update: any, state: DeltaStreamState) {
   if (state.localAbort.signal.aborted) return
+  state.resetHangTimer?.()
   if (update.type === "text-delta") {
     if (isSdkOutputNoise(update.text)) return
     if (state.textIdx < 0) {
@@ -627,10 +638,7 @@ function buildSendOptions(
 
 function resetDeltaStreamState(state: DeltaStreamState) {
   state.g.content = []
-  state.g.usage = {
-    input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  }
+  state.g.usage = { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }
   state.textIdx = -1
   state.textAcc = ""
   state.activeToolCalls.clear()
@@ -639,6 +647,11 @@ function resetDeltaStreamState(state: DeltaStreamState) {
 
 function applyRunResult(result: any, state: DeltaStreamState) {
   if (!result) return
+  if (result.status === "context_exhausted") {
+    state.g.stopReason = "error"
+    state.g.errorMessage = "context window exceeded"
+    return
+  }
   if (state.textIdx < 0 && result.result && !isSdkOutputNoise(result.result)) {
     state.g.content.push({ type: "text", text: result.result })
     state.textIdx = state.g.content.length - 1
@@ -672,7 +685,7 @@ function createRecoveryAbort(o?: SimpleStreamOptions): AbortController {
 const MAX_OUTPUT_CONTINUATIONS = 3
 
 async function executeSendCycle(args: {
-  agent: any
+  agent: CursorSdkAgent
   text: string
   images: { data: string; mimeType: string }[]
   modelSel: { id: string; params?: CursorParam[] }
@@ -698,9 +711,13 @@ async function executeSendCycle(args: {
     result = await Promise.race([waitForRunResult(run, state.localAbort.signal), abortRej])
   } catch (e) {
     if (state.localAbort.signal.aborted) throw e
-    return undefined
+    piLog("warn", "waitForRunResult failed:", e instanceof Error ? e.message : String(e))
+    return { status: "error" }
   }
 
+  if (result?.status === "error") {
+    piLog("warn", "Agent returned status=error — attempting continuation to recover partial output...")
+  }
   let continuations = 0
   while (
     result?.status !== "finished" &&
@@ -710,7 +727,6 @@ async function executeSendCycle(args: {
   ) {
     piLog("warn", `Output token limit hit (status=${result?.status}), continuation ${continuations + 1}/${MAX_OUTPUT_CONTINUATIONS}...`)
     continuations++
-    state.textAcc = ""
     const contRun = await Promise.race([
       agent.send("", buildSendOptions(modelSel, state, false)),
       abortRej,
@@ -725,6 +741,10 @@ async function executeSendCycle(args: {
     } catch (e) {
       if (state.localAbort.signal.aborted) throw e
       result = undefined
+      break
+    }
+    if (result?.status === "error") {
+      piLog("warn", `Continuation ${continuations}/${MAX_OUTPUT_CONTINUATIONS} returned status=error — keeping partial output`)
       break
     }
   }
@@ -787,7 +807,8 @@ async function withSilencedSdk<T>(fn: () => Promise<T>): Promise<T> {
   finally { exitSdkSilence() }
 }
 
-const rulesDir = join(fileURLToPath(new URL(".", import.meta.url)), "rules")
+const rulesDir = join(PLUGIN_DIR, "rules")
+const _rulesSrcMtime = new Map<string, number>()
 
 function ensureCursorRules(cwd: string) {
   const targetDir = join(cwd, ".cursor", "rules")
@@ -797,6 +818,13 @@ function ensureCursorRules(cwd: string) {
     const src = join(rulesDir, file)
     const target = join(targetDir, file)
     try {
+      const srcStat = statSync(src)
+      const cachedSrcMtime = _rulesSrcMtime.get(file)
+      if (cachedSrcMtime === srcStat.mtimeMs && existsSync(target)) {
+        const targetStat = statSync(target)
+        if (targetStat.mtimeMs >= srcStat.mtimeMs) continue
+      }
+      _rulesSrcMtime.set(file, srcStat.mtimeMs)
       const srcContent = readFileSync(src, "utf-8")
       if (existsSync(target)) {
         const targetContent = readFileSync(target, "utf-8")
@@ -807,7 +835,7 @@ function ensureCursorRules(cwd: string) {
   }
 }
 
-const extDir = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "bin")
+const extDir = join(PLUGIN_DIR, "..", "..", "bin")
 if (!process.env.PATH?.includes(extDir)) {
   process.env.PATH = extDir + ":" + (process.env.PATH ?? "")
 }
@@ -914,7 +942,13 @@ export default async function (pi: ExtensionAPI) {
       activeAgents.delete(key)
     }
     if (scopedSession) sessionCwds.delete(sessionId)
-    if (ev?.reason === "quit") compactedSessions.clear()
+    if (ev?.reason === "quit") {
+      compactedSessions.clear()
+      clearInterval(_stuckCleanupInterval)
+      for (const cwd of hooksInstalledForCwd) {
+        try { removeHooks(cwd) } catch {}
+      }
+    }
   })
 
   function resetCursorState(sessionId?: string, scopedSession = false) {
@@ -954,19 +988,61 @@ export default async function (pi: ExtensionAPI) {
     }
   }
   pi.on("session_before_compact", (event: any) => {
-    const sessionId = providedSessionId(event) ?? lastStreamSessionId
-    const scopedSession = sessionId !== undefined
-    resetCursorState(sessionId, scopedSession)
+    // Only abort in-flight stream; preserve Cursor agents so SQLite history
+    // survives compaction. Pi-core handles real summary generation.
+    if (_cursorAbort) {
+      try { _cursorAbort.abort() } catch {}
+      _cursorAbort = null
+    }
     if (COMPACTION_MODE !== "extension") return
     const prep = event?.preparation
     if (!prep?.firstKeptEntryId) return
     return buildDelegatedCompaction(prep)
   })
   pi.on("session_compact", (event: any) => {
-    const sessionId = providedSessionId(event) ?? lastStreamSessionId
-    const scopedSession = sessionId !== undefined
-    resetCursorState(sessionId, scopedSession)
+    // No-op: agents preserved, pi-core already persisted real summary.
   })
+}
+
+// ============================================================================
+// cursorStream helpers
+// ============================================================================
+
+/** Evict a broken agent from activeAgents, mark as stuck, and remove from state file. */
+function evictAgent(sk: string, cwd: string, agentEntry?: ActiveAgentEntry) {
+  if (agentEntry) {
+    stuckAgentIds.add(agentEntry.agentId)
+    try { agentEntry.agent.close() } catch {}
+    activeAgents.delete(sk)
+    try {
+      const s = loadAgentState(cwd)
+      delete s.agents[sk]
+      saveAgentState(cwd, s)
+    } catch {}
+  }
+}
+
+/** Common retry execution: reset state, send, apply result, end stream on success. */
+async function retrySendWithAgent(
+  agent: CursorSdkAgent,
+  args: {
+    text: string; images: { data: string; mimeType: string }[]
+    modelSel: { id: string; params?: CursorParam[] }
+    deltaState: DeltaStreamState; st: AssistantMessageEventStream
+    localAbort: AbortController; abortRej: Promise<never>
+    force?: boolean
+  },
+) {
+  const { text, images, modelSel, deltaState, st, localAbort, abortRej, force } = args
+  resetDeltaStreamState(deltaState)
+  st.push({ type: "start", partial: deltaState.g })
+  const result = await executeSendCycle({
+    agent, text, images, modelSel, state: deltaState, abortRej, force,
+  })
+  applyRunResult(result, deltaState)
+  if (localAbort.signal.aborted) throw new Error("aborted")
+  st.push({ type: "done", reason: deltaState.g.stopReason as "stop" | "length" | "toolUse", message: deltaState.g })
+  st.end()
 }
 
 function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): AssistantMessageEventStream {
@@ -976,8 +1052,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
     const g: AssistantMessage = {
       role: "assistant", content: [],
       api: m.api, provider: m.provider, model: m.id,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      usage: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
       stopReason: "stop", timestamp: Date.now(),
     }
 
@@ -988,7 +1063,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
     const cwd = getSessionCwd(sessionId)
     const sk = cwd + "|" + sessionId + "|" + m.id
     let agentEntry: ActiveAgentEntry | undefined
-    const localAbort = new AbortController()
+    let localAbort: AbortController = new AbortController()
     _cursorAbort = localAbort
     if (o?.signal) {
       if (o.signal.aborted) {
@@ -1004,21 +1079,26 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
     let hangTriggered = false
     let forceRetryAttempted = false
     let calmRetries = 0
-    const hangTimer = setTimeout(() => {
-      piLog("warn", "Agent hang timeout (" + (AGENT_HANG_TIMEOUT_MS / 60000) + "min), aborting...")
-      hangTriggered = true
-      const agentId = agentEntry?.agentId
-      if (agentId) stuckAgentIds.add(agentId)
-      localAbort.abort()
-    }, AGENT_HANG_TIMEOUT_MS)
+    let hangTimer: ReturnType<typeof setTimeout>
+    const resetHangTimer = () => {
+      clearTimeout(hangTimer)
+      hangTimer = setTimeout(() => {
+        piLog("warn", "Agent hang timeout (" + (AGENT_HANG_TIMEOUT_MS / 60000) + "min), aborting...")
+        hangTriggered = true
+        const agentId = agentEntry?.agentId
+        if (agentId) stuckAgentIds.add(agentId)
+        localAbort.abort()
+      }, AGENT_HANG_TIMEOUT_MS)
+    }
+    resetHangTimer()
 
     let apiKey = ""
     let text = ""
     let images: { data: string; mimeType: string }[] = []
     let modelSel: { id: string; params?: CursorParam[] } = { id: m.id }
-    const abortRej = makeAbortRej(localAbort)
+    let abortRej = makeAbortRej(localAbort)
     const deltaState: DeltaStreamState = {
-      g, st, m, textIdx: -1, textAcc: "", activeToolCalls: new Map(), usageBilling: null, localAbort,
+      g, st, m, textIdx: -1, textAcc: "", activeToolCalls: new Map(), usageBilling: null, localAbort, resetHangTimer,
     }
 
     try {
@@ -1093,10 +1173,30 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       if (agentEntry) {
         const idleMs = Date.now() - agentEntry.lastUsed
         if (idleMs > AGENT_MAX_IDLE_MS) {
-          piLog("info", "Agent idle-expired after " + Math.round(idleMs / 1000) + "s, will resume on next message")
+          piLog("info", "Agent idle-expired after " + Math.round(idleMs / 1000) + "s, resuming from disk...")
           try { agentEntry.agent.close() } catch {}
           activeAgents.delete(sk)
           agentEntry = undefined
+          const savedState = loadAgentState(cwd)
+          const savedId = savedState.agents[sk]
+          if (savedId && !stuckAgentIds.has(savedId) && !compactedSessions.has(sessionId)) {
+            try {
+              const resumeP = Agent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"] } })
+              const resumed = await Promise.race([
+                resumeP,
+                new Promise<never>((_, rej) => {
+                  if (localAbort.signal.aborted) rej(new Error("aborted"))
+                  localAbort.signal.addEventListener("abort", () => rej(new Error("aborted")), { once: true })
+                })
+              ])
+              agentEntry = { agent: resumed, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
+              activeAgents.set(sk, agentEntry)
+              piLog("info", "Agent resumed from disk after idle expiry")
+            } catch (err: any) {
+              piLog("warn", "Idle-expired agent resume failed, will create fresh:", err?.message || err)
+              stuckAgentIds.add(savedId)
+            }
+          }
         }
       }
       if (!agentEntry) {
@@ -1126,8 +1226,17 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       })
       applyRunResult(result, deltaState)
 
+      if (result?.status === "error" && agentEntry) {
+        piLog("warn", "Agent error: evicting agent", agentEntry.agentId.slice(0, 16), "so next message creates fresh agent")
+        evictAgent(sk, cwd, agentEntry)
+      }
+
       if (localAbort.signal.aborted) throw new Error("aborted")
-      st.push({ type: "done", reason: g.stopReason as "stop" | "length" | "toolUse", message: g })
+      if (g.stopReason === "error") {
+        st.push({ type: "error", reason: "error", error: g })
+      } else {
+        st.push({ type: "done", reason: g.stopReason as "stop" | "length" | "toolUse", message: g })
+      }
       st.end()
     } catch (error) {
       let sdkErr: any = error
@@ -1137,11 +1246,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
 
       if (sdkErr instanceof AuthenticationError ||
           (error as any)?.code === 16 /* gRPC Unauthenticated */) {
-        const entry = activeAgents.get(sk)
-        if (entry) {
-          try { entry.agent.close() } catch {}
-          activeAgents.delete(sk)
-        }
+        evictAgent(sk, cwd, activeAgents.get(sk))
         const savedIdForRetry = loadAgentState(cwd).agents[sk]
         let retryAgent: any = null
         if (savedIdForRetry && !stuckAgentIds.has(savedIdForRetry)) {
@@ -1158,9 +1263,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         }
         if (!retryAgent) {
           piLog("warn", "Session expired, retrying with fresh Agent.create...")
-          const st2 = loadAgentState(cwd)
-          delete st2.agents[sk]
-          saveAgentState(cwd, st2)
+          evictAgent(sk, cwd)
           try {
             retryAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
             agentEntry = { agent: retryAgent, agentId: retryAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
@@ -1171,27 +1274,14 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         }
         try {
           if (!retryAgent) throw new Error("no agent available for retry")
-          resetDeltaStreamState(deltaState)
-          st.push({ type: "start", partial: g })
-          const retryResult = await executeSendCycle({
-            agent: retryAgent, text, images, modelSel, state: deltaState, abortRej,
-          })
-          applyRunResult(retryResult, deltaState)
-          if (localAbort.signal.aborted) throw new Error("aborted")
-          st.push({ type: "done", reason: g.stopReason as "stop" | "length" | "toolUse", message: g })
-          st.end()
+          await retrySendWithAgent(retryAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej })
           return
         } catch (retryErr: any) {
           piLog("warn", "Auto-retry failed:", retryErr instanceof Error ? retryErr.message : String(retryErr))
         }
         g.stopReason = "error"
         g.errorMessage = `Cursor auth error: ${(sdkErr as any).message || (error as any).message}. Session expired and auto-retry failed.`
-        if (agentEntry) {
-          stuckAgentIds.add(agentEntry.agentId)
-          try { agentEntry.agent.close() } catch {}
-          activeAgents.delete(sk)
-          try { const s = loadAgentState(cwd); delete s.agents[sk]; saveAgentState(cwd, s) } catch {}
-        }
+        evictAgent(sk, cwd, agentEntry)
         st.push({ type: "error", reason: "error", error: g })
         st.end()
         return
@@ -1200,13 +1290,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       if (!localAbort.signal.aborted &&
           (error as any)?.code === 13 &&
           /ENHANCE_YOUR_CALM/i.test((error as any)?.message ?? "")) {
-        const entry = activeAgents.get(sk)
-        if (entry) {
-          stuckAgentIds.add(entry.agentId)
-          try { entry.agent.close() } catch {}
-          activeAgents.delete(sk)
-          try { const s = loadAgentState(cwd); delete s.agents[sk]; saveAgentState(cwd, s) } catch {}
-        }
+        evictAgent(sk, cwd, activeAgents.get(sk))
         calmRetries++
         const backoffMs = Math.min(2000 * Math.pow(2, calmRetries - 1), 8000)
         if (calmRetries <= 3) {
@@ -1217,15 +1301,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
             const freshAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
             agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
             activeAgents.set(sk, agentEntry)
-            resetDeltaStreamState(deltaState)
-            st.push({ type: "start", partial: g })
-            const retryResult = await executeSendCycle({
-              agent: freshAgent, text, images, modelSel, state: deltaState, abortRej,
-            })
-            applyRunResult(retryResult, deltaState)
-            if (localAbort.signal.aborted) throw new Error("aborted")
-            st.push({ type: "done", reason: g.stopReason as "stop" | "length" | "toolUse", message: g })
-            st.end()
+            await retrySendWithAgent(freshAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej })
             return
           } catch (retryErr: any) {
             piLog("warn", "ENHANCE_YOUR_CALM retry failed:",
@@ -1234,12 +1310,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         }
         g.stopReason = "error"
         g.errorMessage = `Cursor rate limited (ENHANCE_YOUR_CALM): ${(error as any).message}. Wait a few seconds and retry.`
-        if (agentEntry) {
-          stuckAgentIds.add(agentEntry.agentId)
-          try { agentEntry.agent.close() } catch {}
-          activeAgents.delete(sk)
-          try { const s = loadAgentState(cwd); delete s.agents[sk]; saveAgentState(cwd, s) } catch {}
-        }
+        evictAgent(sk, cwd, agentEntry)
         st.push({ type: "error", reason: "error", error: g })
         st.end()
         return
@@ -1248,12 +1319,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       if (sdkErr instanceof RateLimitError && (sdkErr as any).isRetryable !== false) {
         g.stopReason = "error"
         g.errorMessage = `Cursor rate limited: ${(sdkErr as any).message}`
-        if (agentEntry) {
-          stuckAgentIds.add(agentEntry.agentId)
-          try { agentEntry.agent.close() } catch {}
-          activeAgents.delete(sk)
-          try { const s = loadAgentState(cwd); delete s.agents[sk]; saveAgentState(cwd, s) } catch {}
-        }
+        evictAgent(sk, cwd, agentEntry)
         st.push({ type: "error", reason: "error", error: g })
         st.end()
         return
@@ -1264,15 +1330,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           forceRetryAttempted = true
           try {
             piLog("warn", "Agent busy, retrying with force...")
-            resetDeltaStreamState(deltaState)
-            st.push({ type: "start", partial: g })
-            const retryResult = await executeSendCycle({
-              agent: agentEntry.agent, text, images, modelSel, state: deltaState, force: true, abortRej,
-            })
-            applyRunResult(retryResult, deltaState)
-            if (localAbort.signal.aborted) throw new Error("aborted")
-            st.push({ type: "done", reason: g.stopReason as "stop" | "length" | "toolUse", message: g })
-            st.end()
+            await retrySendWithAgent(agentEntry.agent, { text, images, modelSel, deltaState, st, localAbort, abortRej, force: true })
             return
           } catch (retryErr: any) {
             piLog("warn", "Force retry after busy failed:",
@@ -1281,12 +1339,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         }
         g.stopReason = "error"
         g.errorMessage = `Cursor agent busy: ${(sdkErr as any).message}. Wait and retry.`
-        if (agentEntry) {
-          stuckAgentIds.add(agentEntry.agentId)
-          try { agentEntry.agent.close() } catch {}
-          activeAgents.delete(sk)
-          try { const s = loadAgentState(cwd); delete s.agents[sk]; saveAgentState(cwd, s) } catch {}
-        }
+        evictAgent(sk, cwd, agentEntry)
         st.push({ type: "error", reason: "error", error: g })
         st.end()
         return
@@ -1298,20 +1351,40 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           piLog("warn", "Hang detected, retrying send with force...")
           const recoveryAbort = createRecoveryAbort(o)
           deltaState.localAbort = recoveryAbort
-          resetDeltaStreamState(deltaState)
-          st.push({ type: "start", partial: g })
-          const retryResult = await executeSendCycle({
-            agent: agentEntry.agent, text, images, modelSel, state: deltaState, force: true,
-            abortRej: makeAbortRej(recoveryAbort),
+          await retrySendWithAgent(agentEntry.agent, {
+            text, images, modelSel, deltaState, st,
+            localAbort: recoveryAbort, abortRej: makeAbortRej(recoveryAbort), force: true,
           })
-          applyRunResult(retryResult, deltaState)
-          if (localAbort.signal.aborted) throw new Error("aborted")
-          st.push({ type: "done", reason: g.stopReason as "stop" | "length" | "toolUse", message: g })
-          st.end()
           return
         } catch (retryErr: any) {
           piLog("warn", "Force retry after hang failed:",
             retryErr instanceof Error ? retryErr.message : String(retryErr))
+          // Reset abort state so M1 fresh-agent retry can proceed
+          localAbort = createRecoveryAbort(o)
+          _cursorAbort = localAbort
+          abortRej = makeAbortRej(localAbort)
+          deltaState.localAbort = localAbort
+        }
+      }
+
+      // M1: Retry once on transient network errors (ConnectError, stream closed, etc.)
+      if (!localAbort.signal.aborted && agentEntry && !forceRetryAttempted) {
+        const isTransient = sdkErr instanceof CursorAgentError ||
+          /connect|stream closed|network|timeout|ECONN|ETIMEDOUT/i.test(
+            sdkErr instanceof Error ? sdkErr.message : String(sdkErr))
+        if (isTransient) {
+          forceRetryAttempted = true
+          try {
+            piLog("warn", "Transient error, retrying with fresh agent...")
+            const freshAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
+            agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
+            activeAgents.set(sk, agentEntry)
+            await retrySendWithAgent(freshAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej })
+            return
+          } catch (retryErr: any) {
+            piLog("warn", "Transient error retry failed:",
+              retryErr instanceof Error ? retryErr.message : String(retryErr))
+          }
         }
       }
 
@@ -1319,17 +1392,10 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       g.errorMessage = sdkErr instanceof Error ? sdkErr.message : String(sdkErr)
       const isPureUserAbort = localAbort.signal.aborted && agentEntry && !stuckAgentIds.has(agentEntry.agentId)
       if (agentEntry && !isPureUserAbort) {
-        stuckAgentIds.add(agentEntry.agentId)
-        try { agentEntry.agent.close() } catch {}
-        activeAgents.delete(sk)
-        try {
-          const state = loadAgentState(cwd)
-          delete state.agents[sk]
-          saveAgentState(cwd, state)
-        } catch {}
         if (localAbort.signal.aborted) {
           piLog("warn", "Discarding hung agent:", agentEntry.agentId.slice(0, 16))
         }
+        evictAgent(sk, cwd, agentEntry)
       }
       st.push({ type: "error", reason: g.stopReason, error: g })
       st.end()
@@ -1341,7 +1407,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
   })().catch((err) => {
     piLog("warn", "Unhandled stream error:", err instanceof Error ? err.message : String(err))
     try {
-      const eg: any = { role: "assistant", content: [], stopReason: "error", errorMessage: "unhandled: " + (err instanceof Error ? err.message : String(err)), usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, timestamp: Date.now() }
+      const eg: any = { role: "assistant", content: [], stopReason: "error", errorMessage: "unhandled: " + (err instanceof Error ? err.message : String(err)), usage: { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } }, timestamp: Date.now() }
       st.push({ type: "error", reason: "error", error: eg })
       st.end()
     } catch {}
