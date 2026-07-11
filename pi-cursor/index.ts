@@ -659,7 +659,16 @@ function applyRunResult(result: any, state: DeltaStreamState) {
     state.st.push({ type: "text_delta", contentIndex: state.textIdx, delta: result.result, partial: state.g })
     state.st.push({ type: "text_end", contentIndex: state.textIdx, content: result.result, partial: state.g })
   }
-  state.g.stopReason = result?.status === "finished" ? "stop" : "length"
+  // Se ja temos texto visivel, a resposta esta completa — o loop de continuacao
+  // acima (agent.send("")) ja tentou extrair mais output e nao conseguiu.
+  // Forcar "stop" evita o falso positivo "Model stopped because it reached
+  // the maximum output token limit" no pi-core + auto-compaction desnecessaria.
+  const hasOutput = state.textIdx >= 0 && state.textAcc.trim().length > 0
+  if (result?.status === "finished" || hasOutput) {
+    state.g.stopReason = "stop"
+  } else {
+    state.g.stopReason = "length"
+  }
   if (state.g.stopReason === "length") {
     piLog("warn", "Run ended with non-finished status:", result?.status, "— response may be truncated")
   }
