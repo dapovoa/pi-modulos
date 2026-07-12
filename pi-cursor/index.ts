@@ -669,10 +669,12 @@ function applyRunResult(result: any, state: DeltaStreamState) {
   const hasToolWork = hasThinkingOrToolOutput(state)
   if (result?.status === "finished" || hasOutput || hasToolWork) {
     state.g.stopReason = "stop"
+  } else if (result?.status === "error") {
+    state.g.stopReason = "error"
+    state.g.errorMessage = "Cursor agent error (not output truncation)"
+    piLog("warn", "Run status=error with no output, result:", JSON.stringify(result).slice(0, 500))
   } else {
     state.g.stopReason = "length"
-  }
-  if (state.g.stopReason === "length") {
     piLog("warn", "Run ended with non-finished status:", result?.status, "— response may be truncated")
   }
 }
@@ -728,13 +730,14 @@ async function executeSendCycle(args: {
   }
 
   if (result?.status === "error") {
-    piLog("warn", "Agent returned status=error — attempting continuation to recover partial output...")
+    piLog("warn", "Agent returned status=error — skipping continuation (not output truncation)", JSON.stringify(result).slice(0, 500))
   }
   const toolWorkDone = hasThinkingOrToolOutput(state)
   let continuations = 0
   while (
     result?.status !== "finished" &&
     result?.status !== "cancelled" &&
+    result?.status !== "error" &&
     !toolWorkDone &&
     continuations < MAX_OUTPUT_CONTINUATIONS &&
     !state.localAbort.signal.aborted
