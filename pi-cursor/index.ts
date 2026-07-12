@@ -381,6 +381,10 @@ function ctxWindow(m: CursorModelEntry, p: CursorParam[]): number {
     }
   }
 
+  const isComposer = m.id.includes("composer")
+  const isPremium = m.id.includes("opus") || m.id.includes("gemini") || m.id.includes("sonnet")
+  if (isPremium && isComposer) return 2_000_000
+  if (isComposer || isPremium) return 1_000_000
   return 200_000
 }
 
