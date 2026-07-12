@@ -134,7 +134,7 @@ export default function (pi: ExtensionAPI) {
           }
         }
         step = 1
-        diffStat = execSync("git diff --staged --stat", { cwd: ctx.cwd, encoding: "utf-8" }).trim()
+        diffStat = out
         pi.sendUserMessage("generate commit message for the changes")
       } catch (e: any) { ctx.ui.notify(e instanceof Error ? e.message.slice(0, 80) : "Not a git repo.") }
     },
