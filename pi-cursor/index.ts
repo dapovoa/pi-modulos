@@ -28,6 +28,8 @@
  *   Cursor loads them as project rules via settingSources: ["project"].
  *   This puts rules in the system prompt (cached by Anthropic) instead of
  *   the user message (which changes every turn and defeats caching).
+ * - Auth retry: AuthenticationError triggers retry with fresh API key fetch + Agent.create
+ *   in all code paths (initial Agent creation, Agent.resume, waitForRunResult, consumeRunStream).
  *
  * Auth: add to .pi/agent/auth.json: "pi-cursor": { "type": "api_key", "key": "sk-..." }
  * Get a key at https://cursor.com/dashboard/api
@@ -46,6 +48,7 @@ import {
   calculateCost, createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai"
 import type { SDKAgent as CursorSdkAgent } from "@cursor/sdk"
+import { AuthenticationError as CursorAuthenticationError } from "@cursor/sdk"
 const PLUGIN_DIR = fileURLToPath(new URL(".", import.meta.url))
 const LOG_DIR = join(PLUGIN_DIR, "logs")
 let _logDirReady = false
@@ -572,10 +575,19 @@ async function cancelRunIfSupported(run: any): Promise<void> {
   } catch {}
 }
 
-async function waitForRunResult(run: any, abortSignal: AbortSignal): Promise<any> {
+async function waitForRunResult(run: any, abortSignal: AbortSignal, apiKey: string, modelSel: { id: string; params?: CursorParam[] }, cwd: string, sessionId: string, sk: string): Promise<any> {
   if (abortSignal.aborted) throw new Error("aborted")
   const terminal = new Set(["finished", "error", "cancelled"])
-  if (run.status && terminal.has(run.status)) return run.wait()
+  if (run.status && terminal.has(run.status)) {
+    try {
+      return await run.wait()
+    } catch (e: any) {
+      if (e instanceof Error && (e.name === "AuthenticationError" || e.message?.includes("Unauthenticated") || (e as any)?.code === 16)) {
+        throw new CursorAuthenticationError(e.message)
+      }
+      throw e
+    }
+  }
 
   return new Promise((resolve, reject) => {
     let settled = false
@@ -593,10 +605,18 @@ async function waitForRunResult(run: any, abortSignal: AbortSignal): Promise<any
     }
     const onAbort = () => finish(false, new Error("aborted"))
     abortSignal.addEventListener("abort", onAbort, { once: true })
-    const waitNow = () => run.wait().then(
-      (r: any) => finish(true, r),
-      (e: any) => finish(false, e),
-    )
+    const waitNow = async () => {
+      try {
+        const r = await run.wait()
+        finish(true, r)
+      } catch (e: any) {
+        if (e instanceof Error && (e.name === "AuthenticationError" || e.message?.includes("Unauthenticated") || (e as any)?.code === 16)) {
+          finish(false, new CursorAuthenticationError(e.message))
+        } else {
+          finish(false, e)
+        }
+      }
+    }
     if (typeof run.onDidChangeStatus === "function") {
       unsub = run.onDidChangeStatus((status: string) => {
         if (terminal.has(status)) waitNow()
@@ -609,21 +629,28 @@ async function waitForRunResult(run: any, abortSignal: AbortSignal): Promise<any
 }
 
 async function consumeRunStream(run: any, state: DeltaStreamState): Promise<void> {
-  for await (const msg of run.stream()) {
-    if (state.localAbort.signal.aborted) {
-      await cancelRunIfSupported(run)
-      break
-    }
-    if (msg.type === "tool_call" && !state.activeToolCalls.has(msg.call_id)) {
-      if (msg.status === "running") {
-        state.activeToolCalls.set(msg.call_id, msg.name)
-        appendThinkingDelta(state, `\n  ⚙ ${msg.name}`)
-      } else if (msg.status === "completed" || msg.status === "error") {
-        const name = state.activeToolCalls.get(msg.call_id) || msg.name
-        state.activeToolCalls.delete(msg.call_id)
-        appendThinkingDelta(state, msg.status === "completed" ? ` ✓ ${name}` : ` ✗ ${name}`)
+  try {
+    for await (const msg of run.stream()) {
+      if (state.localAbort.signal.aborted) {
+        await cancelRunIfSupported(run)
+        break
+      }
+      if (msg.type === "tool_call" && !state.activeToolCalls.has(msg.call_id)) {
+        if (msg.status === "running") {
+          state.activeToolCalls.set(msg.call_id, msg.name)
+          appendThinkingDelta(state, `\n  ⚙ ${msg.name}`)
+        } else if (msg.status === "completed" || msg.status === "error") {
+          const name = state.activeToolCalls.get(msg.call_id) || msg.name
+          state.activeToolCalls.delete(msg.call_id)
+          appendThinkingDelta(state, msg.status === "completed" ? ` ✓ ${name}` : ` ✗ ${name}`)
+        }
       }
     }
+  } catch (e: any) {
+    if (e instanceof Error && (e.name === "AuthenticationError" || e.message?.includes("Unauthenticated") || (e as any)?.code === 16)) {
+      throw new CursorAuthenticationError(e.message)
+    }
+    throw e
   }
 }
 
@@ -710,25 +737,49 @@ async function executeSendCycle(args: {
   state: DeltaStreamState
   force?: boolean
   abortRej: Promise<never>
+  apiKey?: string
+  cwd?: string
+  sessionId?: string
+  sk?: string
 }): Promise<any> {
-  const { agent, text, images, modelSel, state, force, abortRej } = args
-  const run = await Promise.race([
-    agent.send(
-      images.length ? { text, images } : text,
-      buildSendOptions(modelSel, state, force),
-    ),
-    abortRej,
-  ])
-  await consumeRunStream(run, state)
+  const { agent, text, images, modelSel, state, force, abortRej, apiKey, cwd, sessionId, sk } = args
+  let run: any
+  try {
+    run = await Promise.race([
+      agent.send(
+        images.length ? { text, images } : text,
+        buildSendOptions(modelSel, state, force),
+      ),
+      abortRej,
+    ])
+  } catch (e: any) {
+    const isAuthError = e instanceof CursorAuthenticationError || e?.code === 16 || /unauthenticated/i.test(e?.message ?? "")
+    if (isAuthError && apiKey && cwd && sessionId && sk) {
+      throw new CursorAuthenticationError(e.message)
+    }
+    throw e
+  }
+  try {
+    await consumeRunStream(run, state)
+  } catch (e: any) {
+    const isAuthError = e instanceof CursorAuthenticationError || e?.code === 16 || /unauthenticated/i.test(e?.message ?? "")
+    if (isAuthError && apiKey && cwd && sessionId && sk) {
+      throw new CursorAuthenticationError(e.message)
+    }
+    throw e
+  }
   if (state.textIdx >= 0 && state.textAcc) {
     state.st.push({ type: "text_end", contentIndex: state.textIdx, content: state.textAcc, partial: state.g })
   }
   if (state.localAbort.signal.aborted) throw new Error("aborted")
   let result: any
   try {
-    result = await Promise.race([waitForRunResult(run, state.localAbort.signal), abortRej])
+    result = await Promise.race([waitForRunResult(run, state.localAbort.signal, apiKey || "", modelSel, cwd || "", sessionId || "", sk || ""), abortRej])
   } catch (e) {
     if (state.localAbort.signal.aborted) throw e
+    if (e instanceof CursorAuthenticationError || (e as any)?.code === 16) {
+      throw e
+    }
     piLog("warn", "waitForRunResult failed:", e instanceof Error ? e.message : String(e))
     return { status: "error" }
   }
@@ -758,9 +809,12 @@ async function executeSendCycle(args: {
     }
     if (state.localAbort.signal.aborted) throw new Error("aborted")
     try {
-      result = await Promise.race([waitForRunResult(contRun, state.localAbort.signal), abortRej])
+      result = await Promise.race([waitForRunResult(contRun, state.localAbort.signal, apiKey || "", modelSel, cwd || "", sessionId || "", sk || ""), abortRej])
     } catch (e) {
       if (state.localAbort.signal.aborted) throw e
+      if (e instanceof CursorAuthenticationError || (e as any)?.code === 16) {
+        throw e
+      }
       result = undefined
       break
     }
@@ -1052,13 +1106,17 @@ async function retrySendWithAgent(
     deltaState: DeltaStreamState; st: AssistantMessageEventStream
     localAbort: AbortController; abortRej: Promise<never>
     force?: boolean
+    apiKey?: string
+    cwd?: string
+    sessionId?: string
+    sk?: string
   },
 ) {
-  const { text, images, modelSel, deltaState, st, localAbort, abortRej, force } = args
+  const { text, images, modelSel, deltaState, st, localAbort, abortRej, force, apiKey, cwd, sessionId, sk } = args
   resetDeltaStreamState(deltaState)
   st.push({ type: "start", partial: deltaState.g })
   const result = await executeSendCycle({
-    agent, text, images, modelSel, state: deltaState, abortRej, force,
+    agent, text, images, modelSel, state: deltaState, abortRej, force, apiKey, cwd, sessionId, sk,
   })
   applyRunResult(result, deltaState)
   if (localAbort.signal.aborted) throw new Error("aborted")
@@ -1183,6 +1241,30 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
             agentEntry = { agent: resumed, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
             activeAgents.set(sk, agentEntry)
           } catch (err: any) {
+            const isAuthError = err instanceof AuthenticationError || err?.code === 16 || /unauthenticated/i.test(err?.message ?? "")
+            if (isAuthError) {
+              piLog("warn", "Auth error on resume, retrying with fresh API key...")
+              apiKey = o?.apiKey || getApiKey(sessionId)
+              if (apiKey) {
+                try {
+                  const freshResumeP = Agent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"] } })
+                  const freshResumed = await Promise.race([
+                    freshResumeP,
+                    new Promise<never>((_, rej) => {
+                      if (localAbort.signal.aborted) rej(new Error("aborted"))
+                      localAbort.signal.addEventListener("abort", () => rej(new Error("aborted")), { once: true })
+                    })
+                  ])
+                  agentEntry = { agent: freshResumed, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
+                  activeAgents.set(sk, agentEntry)
+                  piLog("info", "Agent resume succeeded after auth retry")
+                  return
+                } catch (freshErr: any) {
+                  piLog("warn", "Fresh resume also failed:", freshErr?.message || freshErr)
+                  stuckAgentIds.add(savedId)
+                }
+              }
+            }
             piLog("warn", "Agent resume failed, creating fresh agent:", err?.message || err)
             stuckAgentIds.add(savedId)
           }
@@ -1214,6 +1296,30 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
               activeAgents.set(sk, agentEntry)
               piLog("info", "Agent resumed from disk after idle expiry")
             } catch (err: any) {
+              const isAuthError = err instanceof AuthenticationError || err?.code === 16 || /unauthenticated/i.test(err?.message ?? "")
+              if (isAuthError) {
+                piLog("warn", "Auth error on idle-expired resume, retrying with fresh API key...")
+                apiKey = o?.apiKey || getApiKey(sessionId)
+                if (apiKey) {
+                  try {
+                    const freshResumeP = Agent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"] } })
+                    const freshResumed = await Promise.race([
+                      freshResumeP,
+                      new Promise<never>((_, rej) => {
+                        if (localAbort.signal.aborted) rej(new Error("aborted"))
+                        localAbort.signal.addEventListener("abort", () => rej(new Error("aborted")), { once: true })
+                      })
+                    ])
+                    agentEntry = { agent: freshResumed, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
+                    activeAgents.set(sk, agentEntry)
+                    piLog("info", "Idle-expired agent resume succeeded after auth retry")
+                    return
+                  } catch (freshErr: any) {
+                    piLog("warn", "Fresh idle-expired resume also failed:", freshErr?.message || freshErr)
+                    stuckAgentIds.add(savedId)
+                  }
+                }
+              }
               piLog("warn", "Idle-expired agent resume failed, will create fresh:", err?.message || err)
               stuckAgentIds.add(savedId)
             }
@@ -1221,16 +1327,52 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         }
       }
       if (!agentEntry) {
-        const createP = Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
-        const agent = await Promise.race([
-          createP,
-          new Promise<never>((_, rej) => {
-            if (localAbort.signal.aborted) rej(new Error("aborted"))
-            localAbort.signal.addEventListener("abort", () => rej(new Error("aborted")), { once: true })
-          })
-        ])
-        agentEntry = { agent, agentId: agent.agentId, lastUsed: Date.now(), cwd, sessionId }
-        activeAgents.set(sk, agentEntry)
+        let createSucceeded = false
+        try {
+          const createP = Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
+          const agent = await Promise.race([
+            createP,
+            new Promise<never>((_, rej) => {
+              if (localAbort.signal.aborted) rej(new Error("aborted"))
+              localAbort.signal.addEventListener("abort", () => rej(new Error("aborted")), { once: true })
+            })
+          ])
+          agentEntry = { agent, agentId: agent.agentId, lastUsed: Date.now(), cwd, sessionId }
+          activeAgents.set(sk, agentEntry)
+          createSucceeded = true
+        } catch (err: any) {
+          const isAuthError = err instanceof AuthenticationError || err?.code === 16 || /unauthenticated/i.test(err?.message ?? "")
+          if (isAuthError) {
+            piLog("warn", "Auth error on Agent.create, retrying with fresh API key...")
+            apiKey = o?.apiKey || getApiKey(sessionId)
+            if (apiKey) {
+              try {
+                const freshCreateP = Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
+                const freshAgent = await Promise.race([
+                  freshCreateP,
+                  new Promise<never>((_, rej) => {
+                    if (localAbort.signal.aborted) rej(new Error("aborted"))
+                    localAbort.signal.addEventListener("abort", () => rej(new Error("aborted")), { once: true })
+                  })
+                ])
+                agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
+                activeAgents.set(sk, agentEntry)
+                createSucceeded = true
+                piLog("info", "Agent.create succeeded after auth retry")
+              } catch (freshErr: any) {
+                piLog("warn", "Fresh Agent.create also failed:", freshErr?.message || freshErr)
+                throw new AuthenticationError(freshErr?.message || "Authentication failed after retry")
+              }
+            } else {
+              throw new AuthenticationError("No API key available after auth error")
+            }
+          } else {
+            throw err
+          }
+        }
+        if (!createSucceeded && !agentEntry) {
+          throw new Error("Failed to create agent")
+        }
       } else {
         agentEntry.lastUsed = Date.now()
       }
@@ -1244,6 +1386,10 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         modelSel,
         state: deltaState,
         abortRej,
+        apiKey,
+        cwd,
+        sessionId,
+        sk,
       })
       applyRunResult(result, deltaState)
 
@@ -1295,7 +1441,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         }
         try {
           if (!retryAgent) throw new Error("no agent available for retry")
-          await retrySendWithAgent(retryAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej })
+          await retrySendWithAgent(retryAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk })
           return
         } catch (retryErr: any) {
           piLog("warn", "Auto-retry failed:", retryErr instanceof Error ? retryErr.message : String(retryErr))
@@ -1322,7 +1468,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
             const freshAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
             agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
             activeAgents.set(sk, agentEntry)
-            await retrySendWithAgent(freshAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej })
+            await retrySendWithAgent(freshAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk })
             return
           } catch (retryErr: any) {
             piLog("warn", "ENHANCE_YOUR_CALM retry failed:",
@@ -1351,7 +1497,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           forceRetryAttempted = true
           try {
             piLog("warn", "Agent busy, retrying with force...")
-            await retrySendWithAgent(agentEntry.agent, { text, images, modelSel, deltaState, st, localAbort, abortRej, force: true })
+            await retrySendWithAgent(agentEntry.agent, { text, images, modelSel, deltaState, st, localAbort, abortRej, force: true, apiKey, cwd, sessionId, sk })
             return
           } catch (retryErr: any) {
             piLog("warn", "Force retry after busy failed:",
@@ -1375,6 +1521,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           await retrySendWithAgent(agentEntry.agent, {
             text, images, modelSel, deltaState, st,
             localAbort: recoveryAbort, abortRej: makeAbortRej(recoveryAbort), force: true,
+            apiKey, cwd, sessionId, sk,
           })
           return
         } catch (retryErr: any) {
@@ -1400,7 +1547,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
             const freshAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
             agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
             activeAgents.set(sk, agentEntry)
-            await retrySendWithAgent(freshAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej })
+            await retrySendWithAgent(freshAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk })
             return
           } catch (retryErr: any) {
             piLog("warn", "Transient error retry failed:",
