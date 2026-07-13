@@ -194,6 +194,7 @@ const NO_KEY_MSG = "API key nao configurada. Usa /login no pi e seleciona Mistra
 
 export default async function (pi: ExtensionAPI) {
   const models = await resolveProviderModels()
+  const modelCount = models.length
 
   pi.registerProvider(CHAT_PROVIDER, {
     name: "Pi-Mistral",
@@ -202,6 +203,11 @@ export default async function (pi: ExtensionAPI) {
     api: "mistral-conversations",
     streamSimple: streamSimpleMistral,
     models,
+  })
+
+  pi.on("session_start", async (_event, ctx) => {
+    ctx.ui.notify(`[pi-mistral] Discovered ${modelCount} models from API.`, "info")
+    ctx.ui.setEditorText(`[pi-mistral] Discovered ${modelCount} models from API.`)
   })
 
   pi.on("session_start", (_event, ctx) => {

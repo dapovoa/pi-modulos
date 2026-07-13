@@ -658,10 +658,12 @@ function buildSendOptions(
   modelSel: { id: string; params?: CursorParam[] },
   state: DeltaStreamState,
   force?: boolean,
+  isContinuation?: boolean,
 ) {
   const opts: any = {
     model: modelSel,
     onDelta: ({ update }: { update: any }) => handleInteractionUpdate(update, state),
+    streamingBehavior: isContinuation ? "followUp" : "steer",
   }
   if (force) opts.local = { force: true }
   return opts
@@ -748,7 +750,7 @@ async function executeSendCycle(args: {
     run = await Promise.race([
       agent.send(
         images.length ? { text, images } : text,
-        buildSendOptions(modelSel, state, force),
+        buildSendOptions(modelSel, state, force, false),
       ),
       abortRej,
     ])
@@ -800,7 +802,7 @@ async function executeSendCycle(args: {
     piLog("warn", `Output token limit hit (status=${result?.status}), continuation ${continuations + 1}/${MAX_OUTPUT_CONTINUATIONS}...`)
     continuations++
     const contRun = await Promise.race([
-      agent.send("", buildSendOptions(modelSel, state, false)),
+      agent.send("", buildSendOptions(modelSel, state, false, true)),
       abortRej,
     ])
     await consumeRunStream(contRun, state)
@@ -915,6 +917,22 @@ if (!process.env.PATH?.includes(extDir)) {
   process.env.PATH = extDir + ":" + (process.env.PATH ?? "")
 }
 
+const CURSOR_MODELS_CACHE = join(PLUGIN_DIR, "cursor-models.json")
+
+function saveModelsCache(models: CursorModelEntry[]) {
+  try { writeFileSync(CURSOR_MODELS_CACHE, JSON.stringify(models), "utf-8") } catch {}
+}
+
+function loadModelsCache(): CursorModelEntry[] | undefined {
+  try {
+    if (!existsSync(CURSOR_MODELS_CACHE)) return undefined
+    const data = JSON.parse(readFileSync(CURSOR_MODELS_CACHE, "utf-8"))
+    if (!Array.isArray(data) || !data.length) return undefined
+    piLog("info", "Loaded", data.length, "models from cache")
+    return data
+  } catch { return undefined }
+}
+
 export default async function (pi: ExtensionAPI) {
   setSessionCwd(undefined, process.cwd())
   const apiKey = getApiKey()
@@ -923,9 +941,22 @@ export default async function (pi: ExtensionAPI) {
   const { Cursor } = await import("@cursor/sdk")
   let cursorModels: CursorModelEntry[] = []
   try {
-    const models = await Cursor.models.list({ apiKey })
+    // Timeout: 10s; if offline, fail fast instead of hanging
+    const models = await Promise.race([
+      Cursor.models.list({ apiKey }),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error("models.list timeout (no internet?)")), 10_000)),
+    ])
     cursorModels = models as CursorModelEntry[]
-  } catch (err) { piLog("error", "Model discovery FAILED:", err); return }
+    if (cursorModels.length) saveModelsCache(cursorModels)
+  } catch (err) {
+    piLog("warn", "Model discovery FAILED (offline?):", err)
+    cursorModels = loadModelsCache() ?? []
+    if (!cursorModels.length) {
+      piLog("error", "No cached models — provider NOT registered. Connect to internet and restart.")
+      return
+    }
+    piLog("info", "Using cached models from previous successful fetch")
+  }
   if (!cursorModels.length) { piLog("warn", "No models — provider NOT registered"); return }
 
   for (const cm of cursorModels) {
