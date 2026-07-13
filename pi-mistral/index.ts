@@ -207,7 +207,6 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     ctx.ui.notify(`[pi-mistral] Discovered ${modelCount} models from API.`, "info")
-    ctx.ui.setEditorText(`[pi-mistral] Discovered ${modelCount} models from API.`)
   })
 
   pi.on("session_start", (_event, ctx) => {
