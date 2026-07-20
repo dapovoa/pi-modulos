@@ -1298,6 +1298,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           ])
           agentEntry = { agent, agentId: agent.agentId, lastUsed: Date.now(), cwd, sessionId }
           activeAgents.set(sk, agentEntry)
+          { const st = loadAgentState(cwd); st.agents[sk] = agent.agentId; saveAgentState(cwd, st) }
           createSucceeded = true
         } catch (err: any) {
           const isAuthError = err instanceof AuthenticationError || err?.code === 16 || /unauthenticated/i.test(err?.message ?? "")
@@ -1316,6 +1317,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
                 ])
                 agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
                 activeAgents.set(sk, agentEntry)
+                { const st = loadAgentState(cwd); st.agents[sk] = freshAgent.agentId; saveAgentState(cwd, st) }
                 createSucceeded = true
                 piLog("info", "Agent.create succeeded after auth retry")
               } catch (freshErr: any) {
