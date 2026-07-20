@@ -676,7 +676,10 @@ function applyRunResult(result: any, state: DeltaStreamState) {
     state.g.stopReason = "stop"
   } else if (result?.status === "error") {
     state.g.stopReason = "error"
-    state.g.errorMessage = "Cursor agent error (not output truncation)"
+    const sdkErrMsg = result?.error?.message || ""
+    state.g.errorMessage = sdkErrMsg
+      ? `Cursor agent error: ${sdkErrMsg}`
+      : "Cursor agent error (not output truncation)"
     piLog("warn", "Run status=error with no output, result:", JSON.stringify(result).slice(0, 500))
   } else {
     state.g.stopReason = "length"
@@ -802,6 +805,11 @@ async function executeSendCycle(args: {
   if (result?.status === "error" && result?.error?.message && AUTH_RESULT_RE.test(result.error.message)) {
     piLog("warn", "Auth error detected in result:", result.error.message)
     return { status: "auth_error", error: result.error }
+  }
+
+  if (result?.status === "error" && /resource_exhausted/i.test(result?.error?.message ?? "")) {
+    piLog("warn", "Resource exhausted detected in result, will retry with backoff")
+    return { status: "resource_exhausted", error: result.error }
   }
 
   return result
@@ -1390,6 +1398,27 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         g.stopReason = "error"
         g.errorMessage = `Cursor auth error: ${result?.error?.message || "session expired"}. Auto-retry failed.`
         evictAgent(sk, cwd, agentEntry)
+        st.push({ type: "error", reason: "error", error: g })
+        st.end()
+        return
+      }
+
+      if (result?.status === "resource_exhausted") {
+        if (agentEntry && !localAbort.signal.aborted) {
+          const backoffMs = 5000
+          piLog("warn", `Resource exhausted, retrying in ${backoffMs / 1000}s with same agent...`)
+          await new Promise<void>(resolve => setTimeout(resolve, backoffMs))
+          if (!localAbort.signal.aborted) {
+            try {
+              await retrySendWithAgent(agentEntry.agent, { text, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk })
+              return
+            } catch (retryErr: any) {
+              piLog("warn", "Resource exhausted retry failed:", retryErr instanceof Error ? retryErr.message : String(retryErr))
+            }
+          }
+        }
+        g.stopReason = "error"
+        g.errorMessage = `Cursor resource exhausted: ${result?.error?.message || "try again"}.`
         st.push({ type: "error", reason: "error", error: g })
         st.end()
         return
