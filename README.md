@@ -11,7 +11,6 @@ Collection of extensions for the [pi.dev](https://pi.dev) coding agent CLI — c
 | `pi-commit` | Tool | Generates Conventional Commits from staged diffs using any configured model |
 | `pi-cursor` | Provider | Cursor SDK provider with agent session management, hang detection, and auto-retry |
 | `pi-kimi` | Provider | Kimi API provider with streaming, thinking, and tool call support |
-| `pi-memory` | Tool | Injects `.pi/memory/` project wiki into the system prompt for persistent LLM knowledge |
 | `pi-mistral` | Provider + Tools | Mistral AI provider + `mistral_ocr` and `mistral_fim` tools |
 | `pi-nvidia` | Provider | Nvidia NIM provider with 10 models (Nemotron, Gemma, Kimi, DeepSeek, Qwen, etc.) |
 | `pi-qwencloud` | Provider | Qwen Cloud provider with 13 models (Qwen3.7 Max, DeepSeek V4, GLM-5.1, etc.) |
