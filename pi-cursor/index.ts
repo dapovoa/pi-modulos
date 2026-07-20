@@ -17,19 +17,18 @@
  * - Crash recovery: agent IDs persisted to .pi/cursor-agents.json.
  *   On restart, live agents are resumed via Agent.resume().
  * - Error recovery: typed SDK errors (RateLimit, AgentBusy, Auth).
- * - Compaction: on session_before_compact we close all active Cursor agents,
- *   forget persisted agent IDs, and abort any in-flight operation. This lets
- *   pi perform its compaction and token accounting normally. After compaction
- *   the next cursorStream does a fresh Agent.create (SDK owns its own SQLite
- *   history). We no longer try to resume pre-compaction agents, avoiding
- *   "Cannot continue from message role: assistant".
+ * - Compaction: on session_before_compact we abort any in-flight stream.
+ *   Cursor agents and their SQLite history survive compaction (dual-context
+ *   architecture: pi compacted summary + Cursor full SQLite history).
+ *   Pi-core handles real summary generation.
  * - Image support: validates mime types, rejects URLs, warns on bad data.
  * - System prompt: pi behavioural rules written to .cursor/rules/*.mdc.
  *   Cursor loads them as project rules via settingSources: ["project"].
  *   This puts rules in the system prompt (cached by Anthropic) instead of
  *   the user message (which changes every turn and defeats caching).
- * - Auth retry: AuthenticationError triggers retry with fresh API key fetch + Agent.create
- *   in all code paths (initial Agent creation, Agent.resume, waitForRunResult, consumeRunStream).
+ * - Auth retry: AuthenticationError triggers retry with Agent.resume first
+ *   (preserves SQLite memory), then Agent.create as fallback, with fresh
+ *   API key fetch. Covers thrown exceptions AND result-based auth errors.
  *
  * Auth: add to .pi/agent/auth.json: "pi-cursor": { "type": "api_key", "key": "sk-..." }
  * Get a key at https://cursor.com/dashboard/api
@@ -92,7 +91,6 @@ const activeAgents = new Map<string, ActiveAgentEntry>()
 const stuckAgentIds = new Set<string>()
 const AGENTS_FILE = ".pi/cursor-agents.json"
 const sessionCwds = new Map<string, string>()
-const compactedSessions = new Set<string>()
 let defaultSessionCwd = process.cwd()
 let lastStreamSessionId: string | undefined
 const _stuckCleanupInterval = setInterval(() => {
@@ -210,24 +208,10 @@ function installCrashGuards() {
 const AGENT_MAX_IDLE_MS = 8 * 60 * 1000
 const AGENT_HANG_TIMEOUT_MS = 10 * 60 * 1000
 
-type CompactionMode = "pi" | "extension"
-const COMPACTION_MODE: CompactionMode =
-  (process.env.PI_CURSOR_COMPACTION_MODE ?? "pi").toLowerCase() === "pi"
-    ? "pi"
-    : "extension"
-const DELEGATED_SUMMARY_ONLY_KEEP_ID = "__pi-cursor-summary-only__"
 interface CursorParam { id: string; value: string }
 const paramRegistry = new Map<string, { modelId: string; params?: CursorParam[] }>()
 
 interface AgentState { agents: Record<string, string> }
-
-function getSessionIdFromStateKey(key: string): string | undefined {
-  const lastSep = key.lastIndexOf("|")
-  if (lastSep <= 0) return undefined
-  const secondLastSep = key.lastIndexOf("|", lastSep - 1)
-  if (secondLastSep < 0 || secondLastSep + 1 >= lastSep) return undefined
-  return key.slice(secondLastSep + 1, lastSep)
-}
 
 function loadAgentState(cwd: string): AgentState {
   const fp = join(cwd, AGENTS_FILE)
@@ -240,18 +224,6 @@ function loadAgentState(cwd: string): AgentState {
 function saveAgentState(cwd: string, state: AgentState) {
   const fp = join(cwd, AGENTS_FILE)
   try { writeFileSync(fp, JSON.stringify(state), "utf-8") } catch {}
-}
-
-function buildDelegatedCompaction(prep: any) {
-  return {
-    compaction: {
-      summary:
-        "Compaction delegated to pi-cursor. Conversation continuity is handled by the Cursor SDK local checkpoint store.",
-      firstKeptEntryId: DELEGATED_SUMMARY_ONLY_KEEP_ID,
-      tokensBefore: typeof prep?.tokensBefore === "number" ? prep.tokensBefore : 0,
-      details: { provider: "pi-cursor", mode: "extension-delegated", keepRecent: false },
-    },
-  }
 }
 
 const DANGEROUS_PATTERNS = [
@@ -825,10 +797,11 @@ async function executeSendCycle(args: {
       break
     }
   }
-  if (continuations > 0 && result?.status === "finished") {
-    piLog("info", `Output continuation completed after ${continuations} extra cycle(s)`)
-  } else if (continuations >= MAX_OUTPUT_CONTINUATIONS && result?.status !== "finished") {
-    piLog("warn", `Output still truncated after ${continuations} continuation(s) — returning as-is`)
+
+  const AUTH_RESULT_RE = /authenticat|unauthenticated|invalid.*key|session.*expired|logged?\s*(in|out)/i
+  if (result?.status === "error" && result?.error?.message && AUTH_RESULT_RE.test(result.error.message)) {
+    piLog("warn", "Auth error detected in result:", result.error.message)
+    return { status: "auth_error", error: result.error }
   }
 
   return result
@@ -1007,7 +980,6 @@ export default async function (pi: ExtensionAPI) {
     const sessionId = getSessionId(ctx, event)
     setSessionCwd(sessionId, ctx?.cwd)
     const cwd = getSessionCwd(sessionId)
-    compactedSessions.delete(sessionId)
     for (const [key, entry] of activeAgents) {
       if (entry.sessionId === sessionId) {
         stuckAgentIds.delete(entry.agentId)
@@ -1049,7 +1021,6 @@ export default async function (pi: ExtensionAPI) {
     }
     if (scopedSession) sessionCwds.delete(sessionId)
     if (ev?.reason === "quit") {
-      compactedSessions.clear()
       clearInterval(_stuckCleanupInterval)
       for (const cwd of hooksInstalledForCwd) {
         try { removeHooks(cwd) } catch {}
@@ -1057,53 +1028,11 @@ export default async function (pi: ExtensionAPI) {
     }
   })
 
-  function resetCursorState(sessionId?: string, scopedSession = false) {
-    if (_cursorAbort) {
-      try { _cursorAbort.abort() } catch {}
-      _cursorAbort = null
-    }
-    const sid = getSessionId(sessionId)
-    const affectedCwds = new Set<string>()
-    if (scopedSession) {
-      affectedCwds.add(getSessionCwd(sid))
-      compactedSessions.add(sid)
-    } else {
-      for (const cwd of sessionCwds.values()) affectedCwds.add(cwd)
-      affectedCwds.add(getSessionCwd())
-      for (const sid of sessionCwds.keys()) compactedSessions.add(sid)
-      compactedSessions.add("default")
-    }
-    for (const [key, entry] of activeAgents) {
-      if (scopedSession && entry.sessionId !== sid) continue
-      try { entry.agent.close() } catch {}
-      affectedCwds.add(entry.cwd)
-      activeAgents.delete(key)
-    }
-    for (const cwd of affectedCwds) {
-      try {
-        const st = loadAgentState(cwd)
-        if (scopedSession) {
-          for (const key of Object.keys(st.agents)) {
-            if (getSessionIdFromStateKey(key) === sid) delete st.agents[key]
-          }
-        } else {
-          st.agents = {}
-        }
-        saveAgentState(cwd, st)
-      } catch {}
-    }
-  }
   pi.on("session_before_compact", (event: any) => {
-    // Only abort in-flight stream; preserve Cursor agents so SQLite history
-    // survives compaction. Pi-core handles real summary generation.
     if (_cursorAbort) {
       try { _cursorAbort.abort() } catch {}
       _cursorAbort = null
     }
-    if (COMPACTION_MODE !== "extension") return
-    const prep = event?.preparation
-    if (!prep?.firstKeptEntryId) return
-    return buildDelegatedCompaction(prep)
   })
   pi.on("session_compact", (event: any) => {
     // No-op: agents preserved, pi-core already persisted real summary.
@@ -1188,6 +1117,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
     }
     let hangTriggered = false
     let forceRetryAttempted = false
+    let m1RetryAttempted = false
     let calmRetries = 0
     let hangTimer: ReturnType<typeof setTimeout>
     const resetHangTimer = () => {
@@ -1258,7 +1188,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       if (!agentEntry) {
         const savedState = loadAgentState(cwd)
         const savedId = savedState.agents[sk]
-        const shouldSkipResume = !savedId || stuckAgentIds.has(savedId) || compactedSessions.has(sessionId)
+        const shouldSkipResume = !savedId || stuckAgentIds.has(savedId)
         if (savedId && !shouldSkipResume) {
           try {
             const resumeP = Agent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"] } })
@@ -1289,7 +1219,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
                   agentEntry = { agent: freshResumed, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
                   activeAgents.set(sk, agentEntry)
                   piLog("info", "Agent resume succeeded after auth retry")
-                  return
                 } catch (freshErr: any) {
                   piLog("warn", "Fresh resume also failed:", freshErr?.message || freshErr)
                   stuckAgentIds.add(savedId)
@@ -1313,7 +1242,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           agentEntry = undefined
           const savedState = loadAgentState(cwd)
           const savedId = savedState.agents[sk]
-          if (savedId && !stuckAgentIds.has(savedId) && !compactedSessions.has(sessionId)) {
+          if (savedId && !stuckAgentIds.has(savedId)) {
             try {
               const resumeP = Agent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"] } })
               const resumed = await Promise.race([
@@ -1344,7 +1273,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
                     agentEntry = { agent: freshResumed, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
                     activeAgents.set(sk, agentEntry)
                     piLog("info", "Idle-expired agent resume succeeded after auth retry")
-                    return
                   } catch (freshErr: any) {
                     piLog("warn", "Fresh idle-expired resume also failed:", freshErr?.message || freshErr)
                     stuckAgentIds.add(savedId)
@@ -1422,6 +1350,49 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         sessionId,
         sk,
       })
+      if (result?.status === "auth_error") {
+        piLog("warn", "Auth error in result, attempting transparent recovery...")
+        const savedIdForAuthRetry = agentEntry?.agentId
+        evictAgent(sk, cwd, agentEntry)
+        apiKey = o?.apiKey || getApiKey(sessionId)
+        let recoveryAgent: any = null
+        if (savedIdForAuthRetry && !stuckAgentIds.has(savedIdForAuthRetry) && apiKey) {
+          try {
+            piLog("warn", "Trying Agent.resume to preserve memory...")
+            recoveryAgent = await Agent.resume(savedIdForAuthRetry, { apiKey, local: { cwd, settingSources: ["project"] } })
+            agentEntry = { agent: recoveryAgent, agentId: savedIdForAuthRetry, lastUsed: Date.now(), cwd, sessionId }
+            activeAgents.set(sk, agentEntry)
+          } catch (resumeErr: any) {
+            piLog("warn", "Resume failed, falling back to Agent.create:", resumeErr?.message || resumeErr)
+            stuckAgentIds.add(savedIdForAuthRetry)
+            recoveryAgent = null
+          }
+        }
+        if (!recoveryAgent && apiKey) {
+          try {
+            recoveryAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
+            agentEntry = { agent: recoveryAgent, agentId: recoveryAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
+            activeAgents.set(sk, agentEntry)
+          } catch (createErr: any) {
+            piLog("warn", "Agent.create also failed:", createErr?.message || createErr)
+          }
+        }
+        if (recoveryAgent) {
+          try {
+            await retrySendWithAgent(recoveryAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk })
+            return
+          } catch (retryErr: any) {
+            piLog("warn", "Auth recovery retry failed:", retryErr instanceof Error ? retryErr.message : String(retryErr))
+          }
+        }
+        g.stopReason = "error"
+        g.errorMessage = `Cursor auth error: ${result?.error?.message || "session expired"}. Auto-retry failed.`
+        evictAgent(sk, cwd, agentEntry)
+        st.push({ type: "error", reason: "error", error: g })
+        st.end()
+        return
+      }
+
       applyRunResult(result, deltaState)
 
       if (result?.status === "error" && agentEntry && !hasThinkingOrToolOutput(deltaState)) {
@@ -1444,10 +1415,12 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
 
       if (sdkErr instanceof AuthenticationError ||
           (error as any)?.code === 16 /* gRPC Unauthenticated */) {
-        evictAgent(sk, cwd, activeAgents.get(sk))
-        const savedIdForRetry = loadAgentState(cwd).agents[sk]
+        const agentToEvict = activeAgents.get(sk)
+        const savedIdForRetry = agentToEvict?.agentId ?? loadAgentState(cwd).agents[sk]
+        evictAgent(sk, cwd, agentToEvict)
+        apiKey = o?.apiKey || getApiKey(sessionId)
         let retryAgent: any = null
-        if (savedIdForRetry && !stuckAgentIds.has(savedIdForRetry)) {
+        if (savedIdForRetry && !stuckAgentIds.has(savedIdForRetry) && apiKey) {
           try {
             piLog("warn", "Session expired, retrying with Agent.resume (preserve memory)...")
             retryAgent = await Agent.resume(savedIdForRetry, { apiKey, local: { cwd, settingSources: ["project"] } })
@@ -1459,9 +1432,8 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
             retryAgent = null
           }
         }
-        if (!retryAgent) {
+        if (!retryAgent && apiKey) {
           piLog("warn", "Session expired, retrying with fresh Agent.create...")
-          evictAgent(sk, cwd)
           try {
             retryAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
             agentEntry = { agent: retryAgent, agentId: retryAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
@@ -1488,7 +1460,9 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       if (!localAbort.signal.aborted &&
           (error as any)?.code === 13 &&
           /ENHANCE_YOUR_CALM/i.test((error as any)?.message ?? "")) {
-        evictAgent(sk, cwd, activeAgents.get(sk))
+        const calmAgentToEvict = activeAgents.get(sk)
+        const calmSavedId = calmAgentToEvict?.agentId ?? loadAgentState(cwd).agents[sk]
+        evictAgent(sk, cwd, calmAgentToEvict)
         calmRetries++
         const backoffMs = Math.min(2000 * Math.pow(2, calmRetries - 1), 8000)
         if (calmRetries <= 3) {
@@ -1496,10 +1470,19 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
             piLog("warn", `Rate limited (ENHANCE_YOUR_CALM), retrying in ${backoffMs / 1000}s...`)
             await new Promise<void>(resolve => setTimeout(resolve, backoffMs))
             if (localAbort.signal.aborted) throw new Error("aborted")
-            const freshAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
-            agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
+            let retryAgent: any = null
+            if (calmSavedId && !stuckAgentIds.has(calmSavedId)) {
+              try {
+                retryAgent = await Agent.resume(calmSavedId, { apiKey, local: { cwd, settingSources: ["project"] } })
+                agentEntry = { agent: retryAgent, agentId: calmSavedId, lastUsed: Date.now(), cwd, sessionId }
+              } catch { retryAgent = null }
+            }
+            if (!retryAgent) {
+              retryAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
+              agentEntry = { agent: retryAgent, agentId: retryAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
+            }
             activeAgents.set(sk, agentEntry)
-            await retrySendWithAgent(freshAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk })
+            await retrySendWithAgent(retryAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk })
             return
           } catch (retryErr: any) {
             piLog("warn", "ENHANCE_YOUR_CALM retry failed:",
@@ -1558,7 +1541,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         } catch (retryErr: any) {
           piLog("warn", "Force retry after hang failed:",
             retryErr instanceof Error ? retryErr.message : String(retryErr))
-          // Reset abort state so M1 fresh-agent retry can proceed
           localAbort = createRecoveryAbort(o)
           _cursorAbort = localAbort
           abortRej = makeAbortRej(localAbort)
@@ -1566,19 +1548,30 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         }
       }
 
-      // M1: Retry once on transient network errors (ConnectError, stream closed, etc.)
-      if (!localAbort.signal.aborted && agentEntry && !forceRetryAttempted) {
+      if (!localAbort.signal.aborted && agentEntry && !m1RetryAttempted) {
         const isTransient = sdkErr instanceof CursorAgentError ||
           /connect|stream closed|network|timeout|ECONN|ETIMEDOUT/i.test(
             sdkErr instanceof Error ? sdkErr.message : String(sdkErr))
         if (isTransient) {
-          forceRetryAttempted = true
+          m1RetryAttempted = true
+          const m1AgentToEvict = activeAgents.get(sk)
+          const m1SavedId = m1AgentToEvict?.agentId ?? loadAgentState(cwd).agents[sk]
+          evictAgent(sk, cwd, m1AgentToEvict)
           try {
-            piLog("warn", "Transient error, retrying with fresh agent...")
-            const freshAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
-            agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
+            piLog("warn", "Transient error, retrying...")
+            let m1Agent: any = null
+            if (m1SavedId && !stuckAgentIds.has(m1SavedId)) {
+              try {
+                m1Agent = await Agent.resume(m1SavedId, { apiKey, local: { cwd, settingSources: ["project"] } })
+                agentEntry = { agent: m1Agent, agentId: m1SavedId, lastUsed: Date.now(), cwd, sessionId }
+              } catch { m1Agent = null }
+            }
+            if (!m1Agent) {
+              m1Agent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"] } })
+              agentEntry = { agent: m1Agent, agentId: m1Agent.agentId, lastUsed: Date.now(), cwd, sessionId }
+            }
             activeAgents.set(sk, agentEntry)
-            await retrySendWithAgent(freshAgent, { text, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk })
+            await retrySendWithAgent(m1Agent, { text, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk })
             return
           } catch (retryErr: any) {
             piLog("warn", "Transient error retry failed:",
