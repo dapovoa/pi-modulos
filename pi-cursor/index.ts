@@ -1405,9 +1405,8 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
 
       if (result?.status === "resource_exhausted") {
         if (agentEntry && !localAbort.signal.aborted) {
-          const backoffMs = 5000
-          piLog("warn", `Resource exhausted, retrying in ${backoffMs / 1000}s with same agent...`)
-          await new Promise<void>(resolve => setTimeout(resolve, backoffMs))
+          piLog("warn", "Resource exhausted, retrying once in 5s...")
+          await new Promise<void>(resolve => setTimeout(resolve, 5000))
           if (!localAbort.signal.aborted) {
             try {
               await retrySendWithAgent(agentEntry.agent, { text, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk })
@@ -1418,7 +1417,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           }
         }
         g.stopReason = "error"
-        g.errorMessage = `Cursor resource exhausted: ${result?.error?.message || "try again"}.`
+        g.errorMessage = `Cursor resource exhausted: ${result?.error?.message || ""}`
         st.push({ type: "error", reason: "error", error: g })
         st.end()
         return
