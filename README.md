@@ -30,3 +30,9 @@ ln -s $(pwd)/pi-mistral ~/.pi/agent/extensions/pi-mistral
 ```
 
 Requires pi.dev CLI with extension support.
+
+---
+
+## License
+
+This project is under the MIT License. See the [LICENSE](LICENSE) file for details.
