@@ -1,5 +1,10 @@
 # Pi Modules
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)](https://www.typescriptlang.org/)
+[![pi.dev](https://img.shields.io/badge/pi.dev-extension-8B5CF6?logo=eslint)](https://pi.dev)
+[![Modules](https://img.shields.io/badge/modules-9-4ade80)](.)
+
 Collection of extensions for the [pi.dev](https://pi.dev) coding agent CLI — custom providers, tools, and safeguards.
 
 ## Modules
