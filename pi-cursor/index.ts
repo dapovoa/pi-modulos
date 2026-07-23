@@ -941,7 +941,6 @@ export default async function (pi: ExtensionAPI) {
   if (!cursorModels.length) { piLog("warn", "No models — provider NOT registered"); return }
 
   for (const cm of cursorModels) {
-    if (cm.id === "default") continue
     const allV = cm.variants?.length ? cm.variants : [{ params: [] }]
     const defV = allV.find(v => v.isDefault) ?? allV[0]
     const defP = defV.params ?? []
@@ -951,17 +950,17 @@ export default async function (pi: ExtensionAPI) {
       const fast = defP.find(p => p.id === "fast")
       if (fast?.value === "true") finalP = defP.map(p => p.id === "fast" ? { id: "fast", value: "false" } : p)
     }
-    paramRegistry.set(cm.id, { modelId: cm.id, params: finalP.length ? finalP : undefined })
+    const regId = cm.id === "default" ? "auto" : cm.id
+    paramRegistry.set(regId, { modelId: cm.id, params: finalP.length ? finalP : undefined })
   }
 
   const piModels = cursorModels
-    .filter(cm => cm.id !== "default")
     .map(cm => {
       const allV = cm.variants?.length ? cm.variants : [{ params: [] }]
       const defV = allV.find(v => v.isDefault) ?? allV[0]
       const cost = modelCost(cm.id)
       return {
-        id: cm.id, name: cm.displayName,
+        id: cm.id === "default" ? "auto" : cm.id, name: cm.displayName,
         reasoning: hasThinking(cm),
         input: hasVision(cm) ? ["text" as const, "image" as const] : ["text" as const],
         cost,
