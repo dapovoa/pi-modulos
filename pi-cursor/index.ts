@@ -331,8 +331,8 @@ function hasVision(m: CursorModelEntry): boolean {
     if (param.values?.some(v => /vision|image|multimodal/i.test(v.value))) return true
   }
   if (/vision/i.test(m.displayName)) return true
-  // Claude models all support vision; also gemini, grok, kimi
-  return /^(gemini|grok|kimi|claude-)/i.test(m.id)
+  // Claude models all support vision; also gemini, grok, kimi, auto
+  return /^(gemini|grok|kimi|claude-)/i.test(m.id) || m.id === "auto"
 }
 
 function hasThinking(m: CursorModelEntry): boolean {
@@ -357,7 +357,7 @@ function ctxWindow(m: CursorModelEntry, p: CursorParam[]): number {
   }
 
   const isComposer = m.id.includes("composer")
-  const isPremium = m.id.includes("opus") || m.id.includes("gemini") || m.id.includes("sonnet")
+  const isPremium = m.id.includes("opus") || m.id.includes("gemini") || m.id.includes("sonnet") || m.id === "auto"
   if (isPremium && isComposer) return 2_000_000
   if (isComposer || isPremium) return 1_000_000
   return 200_000
@@ -394,6 +394,7 @@ function modelCost(id: string): { input: number; output: number; cacheRead: numb
   if (id.startsWith("claude-sonnet-")) return { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75 }
   if (id.startsWith("claude-haiku-")) return { input: 0.80, output: 4, cacheRead: 0.08, cacheWrite: 1 }
   if (id.startsWith("composer-")) return { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75 }
+  if (id === "auto") return { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75 }
   if (id.startsWith("gpt-")) return { input: 2.50, output: 10, cacheRead: 0.50, cacheWrite: 1.25 }
   if (id.startsWith("gemini-")) return { input: 1.25, output: 5, cacheRead: 0.10, cacheWrite: 0.30 }
   if (id.startsWith("grok-")) return { input: 2, output: 10, cacheRead: 0.20, cacheWrite: 0.50 }
@@ -769,7 +770,6 @@ async function executeSendCycle(args: {
   while (
     result?.status !== "finished" &&
     result?.status !== "cancelled" &&
-    result?.status !== "error" &&
     !toolWorkDone &&
     continuations < MAX_OUTPUT_CONTINUATIONS &&
     !state.localAbort.signal.aborted
