@@ -1,0 +1,38 @@
+# Pi Modules
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)](https://www.typescriptlang.org/)
+[![pi.dev](https://img.shields.io/badge/pi.dev-extension-8B5CF6?logo=eslint)](https://pi.dev)
+[![Modules](https://img.shields.io/badge/modules-9-4ade80)](.)
+
+Collection of extensions for the [pi.dev](https://pi.dev) coding agent CLI — custom providers, tools, and safeguards.
+
+## Modules
+
+| Module | Type | Description |
+|---|---|---|
+| `pi-block` | Guard | Blocks dangerous shell commands and sensitive file reads with interactive confirmations |
+| `pi-code` | Provider | Command Code API provider with git-aware context injection |
+| `pi-commit` | Tool | Generates Conventional Commits from staged diffs using any configured model |
+| `pi-cursor` | Provider | Cursor SDK provider with agent session management, hang detection, and auto-retry |
+| `pi-kimi` | Provider | Kimi API provider with streaming, thinking, and tool call support |
+| `pi-mistral` | Provider + Tools | Mistral AI provider + `mistral_ocr` and `mistral_fim` tools |
+| `pi-nvidia` | Provider | Nvidia NIM provider with 10 models (Nemotron, Gemma, Kimi, DeepSeek, Qwen, etc.) |
+| `pi-qwencloud` | Provider | Qwen Cloud provider with 13 models (Qwen3.7 Max, DeepSeek V4, GLM-5.1, etc.) |
+| `pi-xiaomi` | Provider | Xiaomi MiMo Token Plan provider with explicit prompt cache key injection |
+
+## Setup
+
+Each module is a standalone extension. Copy it to `~/.pi/agent/extensions/` or symlink:
+
+```bash
+ln -s $(pwd)/pi-mistral ~/.pi/agent/extensions/pi-mistral
+```
+
+Requires pi.dev CLI with extension support.
+
+---
+
+## License
+
+This project is under the MIT License. See the [LICENSE](LICENSE) file for details.

@@ -1,0 +1,50 @@
+---
+description: "Code formatting and readability rules (alwaysApply: true)"
+alwaysApply: true
+---
+
+## Code Style & Readability
+
+The code around you may be messy. That is not a license to match it: every line you
+add, edit or move must be clean, readable and consistently formatted - regardless of
+how the surrounding code looks. Never copy the surrounding style when it is bad.
+
+### Formatting (non-negotiable)
+- Indentation: consistent 2 spaces. Tabs only if the whole file already uses tabs AND the formatter config demands it.
+- One statement per line. Never squeeze multiple statements or a multi-step expression into one line.
+- No chained ternaries (`a ? b : c ? d : e`). Use `if/else` or a lookup map. A single short ternary is fine.
+- No long `&&` / `||` chains - split into named boolean variables with clear names.
+- Braces always, even for one-line `if` bodies. No `if (x) doThing();` on one line.
+- Max ~100 chars per line. Wrap long arguments/conditions with one argument per line.
+- Blank lines between logical blocks. No 10+ consecutive lines with no blank line.
+- Do NOT fight the project formatter when it is configured (prettier/eslint/biome): run it, let it decide final whitespace. But if the formatter is NOT configured, use these rules as the standard.
+
+### Structure
+- Functions: keep them short and single-purpose. If a function needs a comment to explain its job, it is too long - split it.
+- Max ~3 levels of indentation. If you need more, extract a helper function.
+- Early return instead of `else` nesting: handle errors/edge cases first, then the happy path.
+- Name things for what they do: verbs for functions, nouns for data. No `data`, `temp`, `x`, `obj`, `result` for non-trivial values.
+- No copy-paste of blocks longer than ~5 lines: extract a function or generalize.
+- No "spaghetti": no goto-style control flow, no deeply nested callbacks, no mutation chains that jump between files. Each function reads top-to-bottom.
+
+### Types (TypeScript)
+- Prefer explicit types over `any`. Define interfaces/types for shared shapes instead of repeating inline object literals.
+- No type gymnastics: no double casts, no `as unknown as`, no `@ts-ignore` to silence real errors. If the type fights you, the structure is wrong - simplify it.
+- Import only what you use. No unused variables, parameters, or imports.
+
+### Changes
+- The code YOU touch becomes clean, even if the surrounding code is not. Do not leave your edit looking like the mess around it.
+- Format what you touch; never reformat unrelated files or unrelated blocks in the same file.
+- No dead code, commented-out blocks, or `console.log` leftovers in deliverables.
+- Deliver complete, working code: no stubs, TODOs, or "placeholder" branches unless the user asked for them.
+
+### File scope (never touch)
+- Never edit `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles. The `.cursorignore` exclusions are intentional boundaries - do not bypass them with shell/rg.
+- Never edit vendor or third-party code, even inside `src/`: files with a license header, "extract from ... source", "Copyright ... Authors", bundled/minified third-party code. Inspect if needed, never modify.
+
+### Frontend: ZERO comments (hard rule)
+- Any file that ships to the frontend (`.tsx`, `.jsx`, `.vue`, `.svelte`, `.astro`, `.ts`/`.js` imported by UI code, `.css`/`.scss` bundled for the browser, HTML) must contain NO comments at all.
+- This includes "simple" or "obvious" comments, section titles, TODO notes, and commented-out code. All of it is forbidden in frontend output.
+- Reason: comments in frontend bundles are noise shipped to the client; the project standard is zero comments in anything the browser receives.
+- If a frontend rule or decision must be documented, put it in the project wiki (`.pi/memory/`) or a README - never in the frontend source.
+- Exception: license headers if the project's build tooling requires them, and nothing else.

@@ -1,0 +1,11 @@
+{
+  "name": "pi-mistral",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "description": "Pi extension for Mistral AI OCR and FIM tools",
+  "dependencies": {
+    "@mistralai/mistralai": "^2.2.1"
+  }
+}

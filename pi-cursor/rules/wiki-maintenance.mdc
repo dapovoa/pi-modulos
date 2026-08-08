@@ -1,0 +1,20 @@
+---
+description: "LLM Wiki maintenance rules for .pi/memory/ — keep index, log, and pages in sync"
+alwaysApply: true
+---
+
+## LLM Wiki Maintenance
+Every project has a wiki in .pi/memory/ maintained by you.
+- index.md - catalog of all pages, keep updated.
+- log.md - append-only log.
+- pages/ - one per active topic.
+
+Awareness first:
+0. When the project has .pi/memory/, read .pi/memory/index.md at the start of the session and whenever you need project memory.
+0b. Before claiming something does not exist, was never done, or is undocumented: read .pi/memory/index.md, .pi/memory/log.md and the relevant pages/ files first. Never assert absence without checking.
+
+Rules:
+1. Update wiki after every meaningful change.
+2. Keep index.md in sync.
+3. Append to log.md with date and task.
+Format: English only, plain text, no markdown formatting.

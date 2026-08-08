@@ -1,0 +1,9 @@
+{
+  "comments": "deepseek/deepseek-v4-flash",
+  "clean": "deepseek/deepseek-v4-flash",
+  "formatter": "deepseek/deepseek-v4-flash",
+  "wiki": "deepseek/deepseek-v4-flash",
+  "bug": "pi-cursor/grok-4.5",
+  "duplication": "pi-cursor/grok-4.5",
+  "security": "pi-cursor/grok-4.5"
+}
