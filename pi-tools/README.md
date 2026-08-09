@@ -9,7 +9,7 @@ Note: `summerize` is NOT here - it serves the pi chat model via `/skill:summeriz
 
 ## How it works
 
-- `/comments`, `/clean`, `/formatter`, `/wiki`, `/bug`, `/duplication`, `/security` are
+- `/comments`, `/clean`, `/formatter`, `/wiki`, `/bug`, `/duplication`, `/security`, `/performance` are
   extension commands (`pi.registerCommand`).
 - Each command reads the skill's `SKILL.md` from this extension's own
   `skills/<name>/SKILL.md` as the prompt (single source of truth - the skills
@@ -33,12 +33,13 @@ Note: `summerize` is NOT here - it serves the pi chat model via `/skill:summeriz
   "wiki": "deepseek/deepseek-v4-flash",
   "bug": "pi-cursor/grok-4.5",
   "duplication": "pi-cursor/grok-4.5",
-  "security": "pi-cursor/grok-4.5"
+  "security": "pi-cursor/grok-4.5",
+  "performance": "pi-cursor/grok-4.5"
 }
 ```
 
 Mechanical (comments, clean, formatter, wiki) -> deepseek-v4-flash (fast/cheap).
-Technical (bug, duplication, security) -> grok-4.5 (strong reasoning).
+Technical (bug, duplication, security, performance) -> grok-4.5 (strong reasoning).
 
 ## Commands
 
@@ -49,5 +50,6 @@ Technical (bug, duplication, security) -> grok-4.5 (strong reasoning).
 - `/bug` - run the bug skill (high-severity correctness bugs in recent commits)
 - `/duplication` - run the duplication skill (consolidate repeated code)
 - `/security` - run the security skill (vulnerabilities, hardening, secrets)
+- `/performance` - run the performance skill (SQL, concurrency, memory, I/O, frontend, API latency)
 
 All edits are delivered as working-tree changes - never committed automatically.

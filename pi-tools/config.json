@@ -5,5 +5,6 @@
   "wiki": "deepseek/deepseek-v4-flash",
   "bug": "pi-cursor/grok-4.5",
   "duplication": "pi-cursor/grok-4.5",
-  "security": "pi-cursor/grok-4.5"
+  "security": "pi-cursor/grok-4.5",
+  "performance": "pi-cursor/grok-4.5"
 }
