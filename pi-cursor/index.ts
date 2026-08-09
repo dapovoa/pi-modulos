@@ -339,7 +339,7 @@ const LOCAL_TOOLS_GUIDANCE =
   "- The .cursorignore exclusions (node_modules/, dist/, .astro/, .wrangler/, .firecrawl/, build output, generated files) are INTENTIONAL boundaries. The tools already respect them; do NOT bypass them with shell/rg to reach ignored directories. Only inspect source files the project owns.\n" +
   "- Vendor or third-party code embedded in the project (files with a license header, 'extract from ... source', bundled/minified third-party code) is NOT ours to edit: inspect it but never modify it.\n" +
   "- Policy: never run dangerous shell commands: git push/commit/reset --hard, rm -rf, sudo, chmod 777, chown, dd, mkfs, fdisk, curl|sh, wget|sh, shutdown/reboot/poweroff/halt. They are blocked.\n" +
-  "- If this project has .pi/memory/, it keeps a project wiki (index.md catalog, log.md history, pages/ topics). Read .pi/memory/index.md for project memory; before claiming something is undocumented, missing or never done, check the wiki and the code first.\n\n"
+  "- If this project has .pi/memory/, it keeps a project wiki (index.md catalog, log.md history, pages/ topics). Read .pi/memory/index.md for project memory; before claiming something is undocumented, missing or never done, check the wiki and the code first. But NEVER edit .pi/ yourself - the wiki is managed by the wiki skill; report wiki inaccuracies instead of changing them.\n\n"
 
 function genHookScript(): string {
   return `#!/bin/bash

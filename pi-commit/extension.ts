@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process"
+import { execSync, execFileSync } from "node:child_process"
 import { writeFileSync, unlinkSync, readFileSync, existsSync } from "node:fs"
 import { resolve } from "node:path"
 import type { ExtensionAPI, ExtensionCommandContext, Model } from "@earendil-works/pi-coding-agent"
@@ -61,7 +61,7 @@ function buildDiffPrompt(cwd: string): string {
   let out = `[diff truncated: ${full.length} chars > ${MAX_DIFF_CHARS}; showing stat + key files]\n\n${stat}\n`
   for (const f of targets) {
     try {
-      const part = execSync(`git diff --staged -- "${f}"`, { cwd, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 })
+      const part = execFileSync("git", ["diff", "--staged", "--", f], { cwd, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 })
       if (out.length + part.length <= MAX_DIFF_CHARS) out += part
     } catch {}
   }
@@ -99,7 +99,7 @@ export default function (pi: ExtensionAPI) {
         if (ok) {
           const tmp = `/tmp/pi-commit-${Date.now()}`
           writeFileSync(tmp, msg, "utf-8")
-          execSync(`git commit -F "${tmp}"`, { cwd: ctx.cwd, encoding: "utf-8", stdio: "pipe" })
+          execFileSync("git", ["commit", "-F", tmp], { cwd: ctx.cwd, encoding: "utf-8", stdio: "pipe" })
           unlinkSync(tmp)
           ctx.ui.notify("Committed!")
         } else {

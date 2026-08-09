@@ -81,7 +81,7 @@ Keep .pi/memory/ small: only pages for issues still present in the code, each wi
 
 ## File scope (never touch)
 
-- Never touch `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles. Do not bypass `.cursorignore` with shell/rg.
+- Never touch `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles. NEVER touch `.pi/` (project wiki/memory - managed only by the `wiki` skill). Do not bypass `.cursorignore` with shell/rg.
 - Never edit vendor or third-party code, even inside `src/`: files with a license header, "extract from ... source", bundled/minified third-party code. Report findings there to the user.
 
 ## Safety rules

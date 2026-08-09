@@ -16,7 +16,7 @@ This skill is exclusively about comments. If a file needs formatting or readabil
 
 ## File scope (never touch)
 
-- **NEVER touch** `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles. The tools already respect `.cursorignore` - do NOT bypass it with shell/rg to reach ignored directories.
+- **NEVER touch** `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles. Also NEVER touch `.pi/` (project wiki/memory - it is knowledge, managed only by the `wiki` skill). The tools already respect `.cursorignore` - do NOT bypass it with shell/rg to reach ignored directories.
 - **NEVER edit vendor or third-party code**, even when it sits inside `src/`: files with a license header, "extract from ... source", "Copyright ... Authors", bundled/minified third-party code. Inspect them if needed, but never modify them.
 - Only touch comment lines in source files the project owns (typically `src/` project code, root config files the project authors).
 

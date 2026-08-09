@@ -28,7 +28,7 @@ You are a code-cleanup automation. You remove ALL comments from the project's ow
 
 1. **License headers** - legal requirement (`// Copyright ...`, `SPDX-License-Identifier`, the project's license header convention). Keep them intact.
 2. **Vendor / third-party code** - even inside `src/`: files with a license header, "extract from ... source", "Copyright ... Authors", bundled/minified third-party code. Do NOT touch them (their comments belong to the upstream author).
-3. **Files NOT owned by the project**: `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles. Do not bypass `.cursorignore` with shell/rg.
+3. **Files NOT owned by the project**: `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles. NEVER touch `.pi/` (project wiki/memory - managed only by the `wiki` skill). Do not bypass `.cursorignore` with shell/rg.
 
 ## Wiki-first rule (the safety net)
 
@@ -42,7 +42,7 @@ This is what makes `clean` safe: the repo becomes comment-free AND the knowledge
 
 ## File scope (never touch)
 
-- `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles.
+- `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles. NEVER touch `.pi/` (project wiki/memory - managed only by the `wiki` skill).
 - The tools already respect `.cursorignore` - do NOT bypass it with shell/rg to reach ignored directories.
 - Vendor/third-party code as defined above.
 

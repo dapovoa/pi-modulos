@@ -4,7 +4,7 @@ import { Mistral } from "@mistralai/mistralai"
 import type { BaseModelCard, FTModelCard } from "@mistralai/mistralai/models/components"
 import { Type } from "typebox"
 import { readFileSync, existsSync } from "node:fs"
-import { extname, join } from "node:path"
+import { extname, join, resolve, relative, isAbsolute } from "node:path"
 import { homedir } from "node:os"
 const CHAT_PROVIDER = "mistral"
 const LEGACY_PROVIDER = "pi-mistral"
@@ -22,6 +22,74 @@ const MIME_MAP: Record<string, string> = {
 }
 
 const isUrl = (s: string) => /^https?:\/\//i.test(s)
+
+const SENSITIVE_PATH = [
+  /\.ssh(\/|$)/,
+  /\/\.env(\..*)?$/,
+  /\.pem$/,
+  /id_rsa/,
+  /\/credentials(\.|$)/i,
+  /\/secrets?(\.|$)/i,
+  /\.npmrc$/,
+  /\.git-credentials$/,
+  /\/tokens?(\.|$)/i,
+  /\/private[_-]?keys?(\/|\.)/i,
+  /auth\.json$/i,
+]
+
+function isPrivateOrLocalHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "")
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "0.0.0.0") {
+    return true
+  }
+  if (host.endsWith(".local") || host.endsWith(".internal")) {
+    return true
+  }
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) {
+    return true
+  }
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host)) {
+    return true
+  }
+  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(host)) {
+    return true
+  }
+  if (/^169\.254\.\d{1,3}\.\d{1,3}$/.test(host)) {
+    return true
+  }
+  if (host === "metadata.google.internal") {
+    return true
+  }
+  return false
+}
+
+function assertSafeOcrUrl(input: string): void {
+  let url: URL
+  try {
+    url = new URL(input)
+  } catch {
+    throw new Error(`URL invalida: ${input}`)
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`Protocolo nao permitido: ${url.protocol}`)
+  }
+  if (isPrivateOrLocalHost(url.hostname)) {
+    throw new Error(`URL interna/privada bloqueada: ${url.hostname}`)
+  }
+}
+
+function resolveOcrLocalPath(input: string, cwd: string): string {
+  const abs = resolve(cwd, input)
+  const rel = relative(cwd, abs)
+  const escaped = rel.startsWith("..") || isAbsolute(rel)
+  if (escaped) {
+    throw new Error(`Caminho fora do projeto bloqueado: ${input}`)
+  }
+  if (SENSITIVE_PATH.some((re) => re.test(abs))) {
+    throw new Error(`Ficheiro sensivel bloqueado: ${input}`)
+  }
+  return abs
+}
 
 type ModelRegistry = {
   getApiKeyForProvider(provider: string): Promise<string | undefined>
@@ -131,10 +199,11 @@ function createClient(apiKey: string): Mistral {
   return new Mistral({ apiKey })
 }
 
-async function runOcr(input: string, apiKey: string, signal?: AbortSignal) {
+async function runOcr(input: string, apiKey: string, cwd: string, signal?: AbortSignal) {
   const client = createClient(apiKey)
 
   if (isUrl(input)) {
+    assertSafeOcrUrl(input)
     const result = await client.ocr.process({
       model: OCR_MODEL,
       document: { type: "document_url", documentUrl: input },
@@ -142,8 +211,9 @@ async function runOcr(input: string, apiKey: string, signal?: AbortSignal) {
     return formatOcrResult(result)
   }
 
-  if (!existsSync(input)) throw new Error(`Ficheiro nao encontrado: ${input}`)
-  const ext = extname(input).toLowerCase()
+  const localPath = resolveOcrLocalPath(input, cwd)
+  if (!existsSync(localPath)) throw new Error(`Ficheiro nao encontrado: ${input}`)
+  const ext = extname(localPath).toLowerCase()
   if (!SUPPORTED_EXTS.has(ext)) {
     throw new Error(
       `Formato "${ext}" nao suportado. Formatos: ${[...SUPPORTED_EXTS].join(", ")}`,
@@ -151,7 +221,7 @@ async function runOcr(input: string, apiKey: string, signal?: AbortSignal) {
   }
 
   const mime = MIME_MAP[ext] ?? "application/octet-stream"
-  const dataUri = `data:${mime};base64,${readFileSync(input).toString("base64")}`
+  const dataUri = `data:${mime};base64,${readFileSync(localPath).toString("base64")}`
   const document = mime.startsWith("image/")
     ? { type: "image_url" as const, imageUrl: dataUri }
     : { type: "document_url" as const, documentUrl: dataUri }
@@ -248,7 +318,8 @@ export default async function (pi: ExtensionAPI) {
         }
       }
       try {
-        const r = await runOcr(params.filePath, key, signal)
+        const cwd = ctx.cwd || process.cwd()
+        const r = await runOcr(params.filePath, key, cwd, signal)
         return {
           content: [{ type: "text", text: `OCR: ${r.pages} pagina(s) (${r.model})\n\n${r.text}` }],
           details: { filePath: params.filePath, pages: r.pages, model: r.model, textLength: r.text.length },
