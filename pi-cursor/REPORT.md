@@ -180,7 +180,7 @@ O valor que conta é o da variante default, e ler outra variante dá números er
 1. **Truncar o SQLite do Cursor SDK sem descartar o agente** seria melhor que reciclar, mas o SDK não expõe API para isso.
    `Agent.resume()` restaura o histórico completo e não existe equivalente com truncagem.
 2. **Compressão do lado do backend:** o Cursor CLI desktop pode usar endpoint ou parâmetros que o SDK público não expõe.
-   Investigar em `PI_MODULES_ROOT/cursor/` (minificado, difícil).
+   Investigar em `<cursor-inspector-dir>/` (minificado, difícil).
 3. **Afinar o fallback de 200K** por família de modelo, se a medição mostrar janelas reais diferentes.
 4. **Rejeição de auth mais longa que o backoff.**
    `recoverFromAuthError` cobre 12 segundos no total, o que resolve as rejeições curtas observadas.
@@ -192,10 +192,10 @@ O valor que conta é o da variante default, e ler outra variante dá números er
 
 ## Ficheiros relevantes
 
-- Código: `PI_MODULES_ROOT/pi-modulos/pi-cursor/index.ts` (1964 linhas)
-- Extensão ativa: `PI_MODULES_ROOT/.pi/agent/extensions/pi-cursor/index.ts` (tem de ser byte-identica ao ficheiro acima)
-- Wiki: `PI_MODULES_ROOT/pi-modulos/pi-cursor/.pi/memory/`
-- Logs: `PI_MODULES_ROOT/.pi/agent/extensions/pi-cursor/logs/pi-cursor-YYYY-MM-DD.log`
-- Auth: `PI_MODULES_ROOT/.pi/agent/auth.json`, sob a chave `pi-cursor` e não `cursor`
+- Código: `<module>/index.ts` (1964 linhas)
+- Extensão ativa: `<installed-extension>/index.ts` (tem de ser byte-identica ao ficheiro acima)
+- Wiki: `<module>/.pi/memory/`
+- Logs: `<logs>/pi-cursor-YYYY-MM-DD.log`
+- Auth: `<auth.json>`, sob a chave `pi-cursor` e não `cursor`
 - SDK: `@cursor/sdk@1.0.25`
 - Pi: `0.83.0`

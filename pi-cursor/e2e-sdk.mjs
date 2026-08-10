@@ -1,21 +1,54 @@
-import { Agent, AuthenticationError } from "PI_MODULES_ROOT/.pi/agent/extensions/pi-cursor/node_modules/@cursor/sdk/dist/esm/index.js"
-import { readFileSync } from "node:fs"
+import { readFileSync, existsSync } from "node:fs"
+import { homedir } from "node:os"
 import { join } from "node:path"
 
-const auth = JSON.parse(readFileSync("PI_MODULES_ROOT/.pi/agent/auth.json", "utf-8"))
-const apiKey = auth["pi-cursor"].key
+const SDK_CANDIDATES = [
+  process.env.PI_CURSOR_SDK_ENTRY,
+  join(homedir(), ".pi", "agent", "extensions", "pi-cursor", "node_modules", "@cursor", "sdk", "dist", "esm", "index.js"),
+  join(process.cwd(), "node_modules", "@cursor", "sdk", "dist", "esm", "index.js"),
+].filter((p) => !!p).filter((p) => existsSync(p))
+if (!SDK_CANDIDATES.length) {
+  console.error("SDK not found (set PI_CURSOR_SDK_ENTRY or run from the extension dir)")
+  process.exit(1)
+}
+const { Agent, AuthenticationError } = await import("file://" + SDK_CANDIDATES[0])
+
+function findApiKey() {
+  const candidates = [
+    process.env.PI_CODING_AGENT_DIR ? join(process.env.PI_CODING_AGENT_DIR, "auth.json") : undefined,
+    process.env.PI_CURSOR_AUTH_FILE,
+    join(process.cwd(), ".pi", "agent", "auth.json"),
+    join(homedir(), ".pi", "agent", "auth.json"),
+  ].filter((p) => !!p)
+  for (const p of candidates) {
+    try {
+      if (existsSync(p)) {
+        const auth = JSON.parse(readFileSync(p, "utf-8"))
+        const entry = auth["pi-cursor"]
+        if (entry?.key) return entry.key
+      }
+    } catch {}
+  }
+  return undefined
+}
+
+const apiKey = findApiKey()
+if (!apiKey) {
+  console.error("NO API KEY FOUND (set PI_CURSOR_AUTH_FILE or PI_CODING_AGENT_DIR)")
+  process.exit(1)
+}
 console.log("key:", apiKey.slice(0, 8) + "..." + apiKey.slice(-4), `(len ${apiKey.length})`)
-console.log("SDK version:", process.env.npm_package_version || "?")
 console.log("CURSOR_BACKEND_URL:", process.env.CURSOR_BACKEND_URL || "(unset)")
 
-const CWD = "PI_MODULES_ROOT/dinaferreira/agenda"
+const CWD = process.env.PI_CURSOR_TEST_CWD || process.cwd()
+const MODEL = { id: process.env.PI_CURSOR_TEST_MODEL || "composer-2.5", params: [{ id: "fast", value: "false" }] }
 
 const t0 = Date.now()
 try {
   console.log("--- Agent.create ---")
   const agent = await Agent.create({
     apiKey,
-    model: { id: "composer-2.5", params: [{ id: "fast", value: "false" }] },
+    model: MODEL,
     local: { cwd: CWD, settingSources: ["project"], enableAgentRetries: false },
   })
   console.log("created agent:", agent.agentId, `(${Date.now() - t0}ms)`)
@@ -23,7 +56,7 @@ try {
   const t1 = Date.now()
   console.log("--- agent.send('olá, responde só OK.') ---")
   const run = await agent.send("olá, responde só OK.", {
-    model: { id: "composer-2.5", params: [{ id: "fast", value: "false" }] },
+    model: MODEL,
     streamingBehavior: "followUp",
   })
   let text = ""

@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Watchdog: when pi-cursor logs a NEW auth rejection (last 5 min), run the E2E probe
 # immediately to distinguish backend-side vs local-side failure.
+# Requires the pi-cursor extension installed; probe runs against its SDK.
 set -u
 
-LOG_DIR="PI_MODULES_ROOT/.pi/agent/extensions/pi-cursor/logs"
-PROBE="PI_MODULES_ROOT/pi-modulos/pi-cursor/e2e-sdk.mjs"
+: "${PI_CURSOR_AGENT_DIR:=${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}}"
+: "${PI_CURSOR_EXT_DIR:=${PI_CURSOR_AGENT_DIR}/extensions/pi-cursor}"
+: "${PI_CURSOR_MODULE_DIR:=${PI_CURSOR_EXT_DIR}}"
+LOG_DIR="$PI_CURSOR_EXT_DIR/logs"
+PROBE="$PI_CURSOR_MODULE_DIR/e2e-sdk.mjs"
 PROBE_DONE="/tmp/pi-cursor-e2e-last.txt"
 TODAY=$(date +%F)
 LOG="$LOG_DIR/pi-cursor-$TODAY.log"
