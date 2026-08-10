@@ -12,8 +12,27 @@ import {
   calculateCost, createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai"
 import type { SDKAgent as CursorSdkAgent } from "@cursor/sdk"
-import { AuthenticationError as CursorAuthenticationError } from "@cursor/sdk"
+import { Agent, AuthenticationError as CursorAuthenticationError } from "@cursor/sdk"
 const PLUGIN_DIR = fileURLToPath(new URL(".", import.meta.url))
+
+let sdkAgent = Agent
+let sdkAuthenticationError = CursorAuthenticationError
+let sdkModule: any = { Agent, AuthenticationError: CursorAuthenticationError }
+const SDK_MODULE_PATH = join(PLUGIN_DIR, "node_modules", "@cursor", "sdk", "dist", "esm", "index.js")
+
+async function reloadSdk(): Promise<boolean> {
+  try {
+    const fresh = await import(`${SDK_MODULE_PATH}?v=${Date.now()}`)
+    sdkAgent = fresh.Agent
+    sdkAuthenticationError = fresh.AuthenticationError
+    sdkModule = fresh
+    piLog("info", "SDK module reloaded via cache-busting import; fresh token cache")
+    return true
+  } catch (e: any) {
+    piLog("warn", "SDK reload failed:", e?.message || String(e))
+    return false
+  }
+}
 const LOG_DIR = join(PLUGIN_DIR, "logs")
 let _logDirReady = false
 function ensureLogDir() {
@@ -228,7 +247,7 @@ async function buildCursorConversationSeed(
   cwd: string,
 ): Promise<string> {
   try {
-    const msgs = await Agent.messages.list(savedId, { runtime: "local", cwd })
+    const msgs = await sdkAgent.messages.list(savedId, { runtime: "local", cwd })
     if (!msgs?.length) return ""
     const seed = turnsToSeedText(msgs)
     if (!seed) return ""
@@ -339,7 +358,7 @@ const LOCAL_TOOLS_GUIDANCE =
   "- The .cursorignore exclusions (node_modules/, dist/, .astro/, .wrangler/, .firecrawl/, build output, generated files) are INTENTIONAL boundaries. The tools already respect them; do NOT bypass them with shell/rg to reach ignored directories. Only inspect source files the project owns.\n" +
   "- Vendor or third-party code embedded in the project (files with a license header, 'extract from ... source', bundled/minified third-party code) is NOT ours to edit: inspect it but never modify it.\n" +
   "- Policy: never run dangerous shell commands: git push/commit/reset --hard, rm -rf, sudo, chmod 777, chown, dd, mkfs, fdisk, curl|sh, wget|sh, shutdown/reboot/poweroff/halt. They are blocked.\n" +
-  "- If this project has .pi/memory/, it keeps a project wiki (index.md catalog, log.md history, pages/ topics). Read .pi/memory/index.md for project memory; before claiming something is undocumented, missing or never done, check the wiki and the code first. But NEVER edit .pi/ yourself - the wiki is managed by the wiki skill; report wiki inaccuracies instead of changing them.\n\n"
+  "- If this project has .pi/memory/, it keeps a project wiki (index.md catalog, log.md history, pages/ topics) that you maintain: read .pi/memory/index.md for project memory, and REGISTER your findings there (log.md after any non-trivial task, pages for bugs/decisions) - never leave knowledge only in this conversation. But the REST of .pi/ is internal: never edit .pi/cursor-agents.json, .pi/pi-block-state.json, or .pi/agent/ (provider state, global config with credentials like auth.json). Only .pi/memory/ (the wiki) is yours to edit.\n\n"
 
 function genHookScript(): string {
   return `#!/bin/bash
@@ -651,7 +670,7 @@ async function waitForRunResult(run: any, abortSignal: AbortSignal, apiKey: stri
       return await run.wait()
     } catch (e: any) {
       if (e instanceof Error && (e.name === "AuthenticationError" || e.message?.includes("Unauthenticated") || (e as any)?.code === 16)) {
-        throw new CursorAuthenticationError(e.message)
+        throw new sdkAuthenticationError(e.message)
       }
       throw e
     }
@@ -679,7 +698,7 @@ async function waitForRunResult(run: any, abortSignal: AbortSignal, apiKey: stri
         finish(true, r)
       } catch (e: any) {
         if (e instanceof Error && (e.name === "AuthenticationError" || e.message?.includes("Unauthenticated") || (e as any)?.code === 16)) {
-          finish(false, new CursorAuthenticationError(e.message))
+          finish(false, new sdkAuthenticationError(e.message))
         } else {
           finish(false, e)
         }
@@ -716,7 +735,7 @@ async function consumeRunStream(run: any, state: DeltaStreamState): Promise<void
     }
   } catch (e: any) {
     if (e instanceof Error && (e.name === "AuthenticationError" || e.message?.includes("Unauthenticated") || (e as any)?.code === 16)) {
-      throw new CursorAuthenticationError(e.message)
+      throw new sdkAuthenticationError(e.message)
     }
     throw e
   }
@@ -820,7 +839,7 @@ const SYNTHETIC_FAILURE_LABEL: Record<string, string> = {
 
 function isAuthLikeError(e: any): boolean {
   const msg = e?.message ?? String(e ?? "")
-  return e instanceof CursorAuthenticationError || e?.code === 16
+  return e instanceof sdkAuthenticationError || e?.code === 16
     || /unauthenticated/i.test(msg) || AUTH_RESULT_RE.test(msg)
     || msg.startsWith(SYNTHETIC_FAILURE_LABEL.auth_error)
 }
@@ -964,18 +983,18 @@ async function executeSendCycle(args: {
       abortRej,
     ])
   } catch (e: any) {
-    const isAuthError = e instanceof CursorAuthenticationError || e?.code === 16 || /unauthenticated/i.test(e?.message ?? "")
+    const isAuthError = e instanceof sdkAuthenticationError || e?.code === 16 || /unauthenticated/i.test(e?.message ?? "")
     if (isAuthError && apiKey && cwd && sessionId && sk) {
-      throw new CursorAuthenticationError(e.message)
+      throw new sdkAuthenticationError(e.message)
     }
     throw e
   }
   try {
     await consumeRunStream(run, state)
   } catch (e: any) {
-    const isAuthError = e instanceof CursorAuthenticationError || e?.code === 16 || /unauthenticated/i.test(e?.message ?? "")
+    const isAuthError = e instanceof sdkAuthenticationError || e?.code === 16 || /unauthenticated/i.test(e?.message ?? "")
     if (isAuthError && apiKey && cwd && sessionId && sk) {
-      throw new CursorAuthenticationError(e.message)
+      throw new sdkAuthenticationError(e.message)
     }
     throw e
   }
@@ -988,7 +1007,7 @@ async function executeSendCycle(args: {
     result = await Promise.race([waitForRunResult(run, state.localAbort.signal, apiKey || "", modelSel, cwd || "", sessionId || "", sk || ""), abortRej])
   } catch (e) {
     if (state.localAbort.signal.aborted) throw e
-    if (e instanceof CursorAuthenticationError || (e as any)?.code === 16) {
+    if (e instanceof sdkAuthenticationError || (e as any)?.code === 16) {
       throw e
     }
     piLog("warn", "waitForRunResult failed:", e instanceof Error ? e.message : String(e))
@@ -1021,7 +1040,7 @@ async function executeSendCycle(args: {
       result = await Promise.race([waitForRunResult(contRun, state.localAbort.signal, apiKey || "", modelSel, cwd || "", sessionId || "", sk || ""), abortRej])
     } catch (e) {
       if (state.localAbort.signal.aborted) throw e
-      if (e instanceof CursorAuthenticationError || (e as any)?.code === 16) {
+      if (e instanceof sdkAuthenticationError || (e as any)?.code === 16) {
         throw e
       }
       result = undefined
@@ -1356,6 +1375,14 @@ async function warmUpAgent(
   resetHangTimer: (() => void) | undefined,
   createFreshAgent: () => Promise<CursorSdkAgent>,
 ): Promise<"ready" | "aborted" | "escalate"> {
+  if (await freshApiKeyWorks(apiKey)) {
+    piLog("warn", "Warm-up: fresh API-key exchange works while SDK keeps rejecting auth -> SDK cached token stale; reloading SDK module")
+    if (await reloadSdk()) {
+      piLog("info", "SDK reloaded during warm-up; escalating to a fresh agent with new token cache")
+      return "escalate"
+    }
+    piLog("warn", "SDK reload failed during warm-up; continuing parked warm-up")
+  }
   for (let attempt = 1; ; attempt++) {
     if (localAbort.signal.aborted) return "aborted"
     resetHangTimer?.()
@@ -1385,12 +1412,24 @@ async function warmUpAgent(
   }
 }
 
-async function recoverFromAuthError(args: {
-  Agent: {
-    resume: (agentId: string, opts: any) => Promise<CursorSdkAgent>
-    create: (opts: any) => Promise<CursorSdkAgent>
-    listRuns: any
+async function freshApiKeyWorks(apiKey: string): Promise<boolean> {
+  try {
+    const baseUrl = process.env.CURSOR_BACKEND_URL || "https://api2.cursor.sh"
+    const res = await fetch(`${baseUrl}/auth/exchange_user_api_key`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: "{}",
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!res.ok) return false
+    const body = await res.json().catch(() => null)
+    return !!(body?.accessToken && body?.refreshToken)
+  } catch {
+    return false
   }
+}
+
+async function recoverFromAuthError(args: {
   savedId?: string
   initialError?: string
   text: string
@@ -1406,12 +1445,23 @@ async function recoverFromAuthError(args: {
   sk: string
 }): Promise<{ ok: boolean; lastError?: string; agentEntry?: ActiveAgentEntry }> {
   const {
-    Agent, savedId, text, images, modelSel, deltaState, st,
+    savedId, text, images, modelSel, deltaState, st,
     localAbort, abortRej, resolveApiKey, cwd, sessionId, sk,
   } = args
   let lastError = args.initialError
   let canResume = !!savedId && !stuckAgentIds.has(savedId)
   let agentEntry: ActiveAgentEntry | undefined
+
+  const apiKey0 = resolveApiKey()
+  if (apiKey0 && await freshApiKeyWorks(apiKey0)) {
+    piLog("warn", "Fresh API-key exchange works while SDK keeps rejecting auth -> SDK cached access token is stale (TTL 1h, no refresh); reloading SDK module for a fresh token cache")
+    if (await reloadSdk()) {
+      canResume = false
+      piLog("info", "SDK reloaded; retrying immediately with fresh token cache")
+    } else {
+      piLog("warn", "SDK reload failed; keeping park-and-retry")
+    }
+  }
 
   for (let attempt = 1; ; attempt++) {
     const parked = attempt > AUTH_RETRY_BACKOFF_MS.length
@@ -1431,13 +1481,13 @@ async function recoverFromAuthError(args: {
     let agent: CursorSdkAgent | undefined
     if (canResume && savedId) {
       try {
-        piLog("warn", "Trying Agent.resume to preserve memory...")
-        agent = await Agent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+        piLog("warn", "Trying sdkAgent.resume to preserve memory...")
+        agent = await sdkAgent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
         agentEntry = { agent, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
       } catch (resumeErr: any) {
-        piLog("warn", "Resume failed, falling back to Agent.create:", resumeErr?.message || resumeErr)
+        piLog("warn", "Resume failed, falling back to sdkAgent.create:", resumeErr?.message || resumeErr)
         try {
-          const diag = await Agent.listRuns(savedId, { runtime: "local", cwd, limit: 5 })
+          const diag = await sdkAgent.listRuns(savedId, { runtime: "local", cwd, limit: 5 })
           const states = (diag?.items ?? []).map((r: any) => `${r.status}${r.errorCode ? "/" + r.errorCode : ""}`).join(", ")
           piLog("warn", `Local store of ${savedId.slice(0, 16)}: ${diag?.items?.length ?? 0} run(s) [${states || "none"}]`)
         } catch (diagErr: any) {
@@ -1450,14 +1500,14 @@ async function recoverFromAuthError(args: {
     }
     if (!agent) {
       try {
-        agent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+        agent = await sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
         agentEntry = { agent, agentId: agent.agentId, lastUsed: Date.now(), cwd, sessionId }
         const state = loadAgentState(cwd)
         state.agents[sk] = agent.agentId
         saveAgentState(cwd, state)
       } catch (createErr: any) {
         lastError = createErr?.message || String(createErr)
-        piLog("warn", "Agent.create also failed:", lastError)
+        piLog("warn", "sdkAgent.create also failed:", lastError)
         if (localAbort.signal.aborted || !isAuthLikeError(createErr)) return { ok: false, lastError, agentEntry }
         continue
       }
@@ -1479,7 +1529,7 @@ async function recoverFromAuthError(args: {
       }
       if (parked && canResume && savedId
           && await probeFreshAgentAuth(
-            () => Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } }),
+            () => sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } }),
             modelSel, abortRej)) {
         piLog("warn", "Fresh agent auth probe passed while the resumed session keeps being rejected; abandoning the dead session...")
         stuckAgentIds.add(savedId)
@@ -1494,7 +1544,6 @@ async function recoverFromAuthError(args: {
 const RESOURCE_FALLBACK_MODEL = "composer-2.5"
 
 async function attemptResourceFallback(args: {
-  Agent: any
   currentModelId: string
   text: string
   images: { data: string; mimeType: string }[]
@@ -1508,7 +1557,7 @@ async function attemptResourceFallback(args: {
   sessionId: string
 }): Promise<boolean> {
   const {
-    Agent, currentModelId, text, images, fallbackContext, deltaState, st,
+    currentModelId, text, images, fallbackContext, deltaState, st,
     localAbort, abortRej, apiKey, cwd, sessionId,
   } = args
   if (currentModelId === RESOURCE_FALLBACK_MODEL) return false
@@ -1528,13 +1577,13 @@ async function attemptResourceFallback(args: {
       const savedId = loadAgentState(cwd).agents[fsk]
       if (savedId && !stuckAgentIds.has(savedId)) {
         try {
-          const resumed = await Agent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+          const resumed = await sdkAgent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
           fEntry = { agent: resumed, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
         } catch {}
       }
     }
     if (!fEntry) {
-      const agent = await Agent.create({ apiKey, model: fbModelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+      const agent = await sdkAgent.create({ apiKey, model: fbModelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
       fEntry = { agent, agentId: agent.agentId, lastUsed: Date.now(), cwd, sessionId }
       const state = loadAgentState(cwd)
       state.agents[fsk] = agent.agentId
@@ -1569,7 +1618,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       stopReason: "stop", timestamp: Date.now(),
     }
 
-    const { Agent, AgentBusyError, RateLimitError, AuthenticationError, CursorAgentError, convertConnectError } = await import("@cursor/sdk")
+    const { Agent, AgentBusyError, RateLimitError, AuthenticationError, CursorAgentError, convertConnectError } = sdkModule
 
     const sessionId = getSessionId(o, inferSessionIdFromContext(ctx))
     lastStreamSessionId = sessionId
@@ -1666,7 +1715,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       const circuitUntil = resourceExhaustedUntil.get(sk) ?? 0
       if (circuitUntil > Date.now()) {
         if (await attemptResourceFallback({
-          Agent, currentModelId: m.id, text, images, fallbackContext,
+          currentModelId: m.id, text, images, fallbackContext,
           deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId,
         })) return
         const retryInSeconds = Math.max(1, Math.ceil((circuitUntil - Date.now()) / 1000))
@@ -1687,7 +1736,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         const shouldSkipResume = !savedId || stuckAgentIds.has(savedId)
         if (savedId && !shouldSkipResume) {
           try {
-            const resumeP = Agent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+            const resumeP = sdkAgent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
             const resumed = await Promise.race([
               resumeP,
               new Promise<never>((_, rej) => {
@@ -1704,7 +1753,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
               apiKey = o?.apiKey || getApiKey(sessionId)
               if (apiKey) {
                 try {
-                  const freshResumeP = Agent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+                  const freshResumeP = sdkAgent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
                   const freshResumed = await Promise.race([
                     freshResumeP,
                     new Promise<never>((_, rej) => {
@@ -1741,7 +1790,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           const savedId = savedState.agents[sk]
           if (savedId && !stuckAgentIds.has(savedId)) {
             try {
-              const resumeP = Agent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+              const resumeP = sdkAgent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
               const resumed = await Promise.race([
                 resumeP,
                 new Promise<never>((_, rej) => {
@@ -1759,7 +1808,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
                 apiKey = o?.apiKey || getApiKey(sessionId)
                 if (apiKey) {
                   try {
-                    const freshResumeP = Agent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+                    const freshResumeP = sdkAgent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
                     const freshResumed = await Promise.race([
                       freshResumeP,
                       new Promise<never>((_, rej) => {
@@ -1786,7 +1835,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       if (!agentEntry) {
         let createSucceeded = false
         try {
-          const createP = Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+          const createP = sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
           const agent = await Promise.race([
             createP,
             new Promise<never>((_, rej) => {
@@ -1802,11 +1851,11 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         } catch (err: any) {
           const isAuthError = err instanceof AuthenticationError || err?.code === 16 || /unauthenticated/i.test(err?.message ?? "")
           if (isAuthError) {
-            piLog("warn", "Auth error on Agent.create, retrying with fresh API key...")
+            piLog("warn", "Auth error on sdkAgent.create, retrying with fresh API key...")
             apiKey = o?.apiKey || getApiKey(sessionId)
             if (apiKey) {
               try {
-                const freshCreateP = Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+                const freshCreateP = sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
                 const freshAgent = await Promise.race([
                   freshCreateP,
                   new Promise<never>((_, rej) => {
@@ -1819,9 +1868,9 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
                 agentIsFresh = true
                 { const st = loadAgentState(cwd); st.agents[sk] = freshAgent.agentId; saveAgentState(cwd, st) }
                 createSucceeded = true
-                piLog("info", "Agent.create succeeded after auth retry")
+                piLog("info", "sdkAgent.create succeeded after auth retry")
               } catch (freshErr: any) {
-                piLog("warn", "Fresh Agent.create also failed:", freshErr?.message || freshErr)
+                piLog("warn", "Fresh sdkAgent.create also failed:", freshErr?.message || freshErr)
                 throw new AuthenticationError(freshErr?.message || "Authentication failed after retry")
               }
             } else {
@@ -1842,7 +1891,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       if (agentChanged && !agentIsFresh && agentEntry && !localAbort.signal.aborted) {
         piLog("info", "Resumed agent cold-start: warming up to clear Cursor auth...")
         const warm = await warmUpAgent(agentEntry.agent, modelSel, apiKey, cwd, sessionId, sk, localAbort, abortRej, deltaState.resetHangTimer,
-          () => Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } }))
+          () => sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } }))
         if (warm === "aborted") {
           g.stopReason = "aborted"
           g.errorMessage = "aborted"
@@ -1854,7 +1903,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           piLog("warn", "Resumed session dead server-side; switching to a fresh agent (re-seeded)...")
           priorSavedId = agentEntry.agentId
           evictAgent(sk, cwd, agentEntry)
-          const freshAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+          const freshAgent = await sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
           agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
           activeAgents.set(sk, agentEntry)
           const state = loadAgentState(cwd)
@@ -1869,7 +1918,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       let seedText = ""
       if (agentIsFresh) {
         if (priorSavedId) {
-          const realSeed = await buildCursorConversationSeed(Agent, priorSavedId, cwd)
+          const realSeed = await buildCursorConversationSeed(sdkAgent, priorSavedId, cwd)
           if (realSeed) {
             seedText = realSeed
             piLog("info", `Fresh agent re-seeded with ${realSeed.length} chars of real Cursor conversation (was: ${fallbackContext.length} chars pi summary)`)
@@ -1900,7 +1949,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         releaseAgent(sk, agentEntry)
         agentEntry = undefined
         const recovery = await recoverFromAuthError({
-          Agent, savedId: savedIdForAuthRetry, initialError: result?.error?.message,
+          savedId: savedIdForAuthRetry, initialError: result?.error?.message,
           text: sendText, images, modelSel, deltaState, st, localAbort, abortRej,
           resolveApiKey: () => o?.apiKey || getApiKey(sessionId),
           cwd, sessionId, sk,
@@ -1943,7 +1992,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         releaseAgent(sk, agentEntry)
         agentEntry = undefined
         if (await attemptResourceFallback({
-          Agent, currentModelId: m.id, text, images, fallbackContext,
+          currentModelId: m.id, text, images, fallbackContext,
           deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId,
         })) return
         const retryInSeconds = Math.ceil((circuitUntil - Date.now()) / 1000)
@@ -1964,13 +2013,13 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         priorSavedId = agentEntry.agentId
         evictAgent(sk, cwd, agentEntry)
         try {
-          const freshAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+          const freshAgent = await sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
           agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
           activeAgents.set(sk, agentEntry)
           const st2 = loadAgentState(cwd); st2.agents[sk] = freshAgent.agentId; saveAgentState(cwd, st2)
           let freshSeed = ""
           if (priorSavedId) {
-            const realSeed = await buildCursorConversationSeed(Agent, priorSavedId, cwd)
+            const realSeed = await buildCursorConversationSeed(sdkAgent, priorSavedId, cwd)
             if (realSeed) freshSeed = realSeed
           }
           if (!freshSeed && fallbackContext) freshSeed = fallbackContext
@@ -2028,7 +2077,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         releaseAgent(sk, agentEntry)
         agentEntry = undefined
         if (await attemptResourceFallback({
-          Agent, currentModelId: m.id, text, images, fallbackContext,
+          currentModelId: m.id, text, images, fallbackContext,
           deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId,
         })) return
         const retryInSeconds = Math.ceil((circuitUntil - Date.now()) / 1000)
@@ -2046,7 +2095,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         releaseAgent(sk, failedAgent)
         agentEntry = undefined
         const recovery = await recoverFromAuthError({
-          Agent, savedId: savedIdForRetry,
+          savedId: savedIdForRetry,
           initialError: (sdkErr as any)?.message || (error as any)?.message,
           text: sendText, images, modelSel, deltaState, st, localAbort, abortRej,
           resolveApiKey: () => o?.apiKey || getApiKey(sessionId),
@@ -2087,12 +2136,12 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
             let retryAgent: any = null
             if (calmSavedId && !stuckAgentIds.has(calmSavedId)) {
               try {
-                retryAgent = await Agent.resume(calmSavedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+                retryAgent = await sdkAgent.resume(calmSavedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
                 agentEntry = { agent: retryAgent, agentId: calmSavedId, lastUsed: Date.now(), cwd, sessionId }
               } catch { retryAgent = null }
             }
             if (!retryAgent) {
-              retryAgent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+              retryAgent = await sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
               agentEntry = { agent: retryAgent, agentId: retryAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
             }
             activeAgents.set(sk, agentEntry)
@@ -2175,12 +2224,12 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
             let m1Agent: any = null
             if (m1SavedId && !stuckAgentIds.has(m1SavedId)) {
               try {
-                m1Agent = await Agent.resume(m1SavedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+                m1Agent = await sdkAgent.resume(m1SavedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
                 agentEntry = { agent: m1Agent, agentId: m1SavedId, lastUsed: Date.now(), cwd, sessionId }
               } catch { m1Agent = null }
             }
             if (!m1Agent) {
-              m1Agent = await Agent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
+              m1Agent = await sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
               agentEntry = { agent: m1Agent, agentId: m1Agent.agentId, lastUsed: Date.now(), cwd, sessionId }
             }
             activeAgents.set(sk, agentEntry)

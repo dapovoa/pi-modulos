@@ -18,7 +18,7 @@ Inspect recent commits and identify critical correctness bugs that escaped revie
 
 ## File scope (never touch)
 
-- **NEVER touch** `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles. Also NEVER touch `.pi/` (project wiki/memory - it is knowledge, managed only by the `wiki` skill). The tools already respect `.cursorignore` - do NOT bypass it with shell/rg to reach ignored directories.
+- **NEVER touch** `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles, or the REST of `.pi/` outside the wiki (never `.pi/cursor-agents.json`, `.pi/pi-block-state.json`, `.pi/agent/` - provider state, global config with credentials). `.pi/memory/` (the wiki) is yours to edit - register findings there. The tools already respect `.cursorignore` - do NOT bypass it with shell/rg to reach ignored directories.
 - **NEVER fix vendor or third-party code**, even inside `src/`: files with a license header, "extract from ... source", "Copyright ... Authors", bundled/minified third-party code. Report findings there to the user; do not edit.
 
 ## Investigation strategy
