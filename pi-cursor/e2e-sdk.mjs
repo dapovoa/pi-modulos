@@ -2,13 +2,46 @@ import { readFileSync, existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
+const agentDir =
+  process.env.PI_CODING_AGENT_DIR ||
+  process.env.PI_CURSOR_AGENT_DIR ||
+  undefined
 const SDK_CANDIDATES = [
   process.env.PI_CURSOR_SDK_ENTRY,
-  join(homedir(), ".pi", "agent", "extensions", "pi-cursor", "node_modules", "@cursor", "sdk", "dist", "esm", "index.js"),
+  agentDir
+    ? join(
+        agentDir,
+        "extensions",
+        "pi-cursor",
+        "node_modules",
+        "@cursor",
+        "sdk",
+        "dist",
+        "esm",
+        "index.js",
+      )
+    : undefined,
+  join(
+    homedir(),
+    ".pi",
+    "agent",
+    "extensions",
+    "pi-cursor",
+    "node_modules",
+    "@cursor",
+    "sdk",
+    "dist",
+    "esm",
+    "index.js",
+  ),
   join(process.cwd(), "node_modules", "@cursor", "sdk", "dist", "esm", "index.js"),
-].filter((p) => !!p).filter((p) => existsSync(p))
+]
+  .filter((p) => !!p)
+  .filter((p) => existsSync(p))
 if (!SDK_CANDIDATES.length) {
-  console.error("SDK not found (set PI_CURSOR_SDK_ENTRY or run from the extension dir)")
+  console.error(
+    "SDK not found (set PI_CURSOR_SDK_ENTRY or PI_CODING_AGENT_DIR, or run from the extension dir)",
+  )
   process.exit(1)
 }
 const { Agent, AuthenticationError } = await import("file://" + SDK_CANDIDATES[0])

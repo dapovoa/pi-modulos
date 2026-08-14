@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process"
+import { execSync, fork, type ChildProcess } from "node:child_process"
 import { AsyncLocalStorage } from "node:async_hooks"
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
@@ -12,24 +12,298 @@ import {
   calculateCost, createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai"
 import type { SDKAgent as CursorSdkAgent } from "@cursor/sdk"
-import { Agent, AuthenticationError as CursorAuthenticationError } from "@cursor/sdk"
+import {
+  Agent,
+  AgentBusyError as CursorAgentBusyError,
+  AuthenticationError as CursorAuthenticationError,
+  CursorAgentError as CursorAgentErrorClass,
+  RateLimitError as CursorRateLimitError,
+  convertConnectError as cursorConvertConnectError,
+  Cursor as CursorApi,
+} from "@cursor/sdk"
 const PLUGIN_DIR = fileURLToPath(new URL(".", import.meta.url))
 
-let sdkAgent = Agent
 let sdkAuthenticationError = CursorAuthenticationError
-let sdkModule: any = { Agent, AuthenticationError: CursorAuthenticationError }
+let sdkModule: any = {
+  Agent,
+  AgentBusyError: CursorAgentBusyError,
+  AuthenticationError: CursorAuthenticationError,
+  CursorAgentError: CursorAgentErrorClass,
+  RateLimitError: CursorRateLimitError,
+  convertConnectError: cursorConvertConnectError,
+  Cursor: CursorApi,
+}
 const SDK_MODULE_PATH = join(PLUGIN_DIR, "node_modules", "@cursor", "sdk", "dist", "esm", "index.js")
+const SDK_HOST_PATH = join(PLUGIN_DIR, "sdk-host.mjs")
+
+type HostPending = {
+  resolve: (v: any) => void
+  reject: (e: any) => void
+  onDelta?: (update: any) => void
+  streamPush?: (msg: any) => void
+  streamEnd?: () => void
+}
+
+class HostRun {
+  status: string | undefined
+  private result: any
+  private streamBuf: any[] = []
+  private streamWaiters: Array<(v: { done: boolean; value?: any }) => void> = []
+  private ended = false
+  private resultWaiters: Array<(r: any) => void> = []
+
+  pushStream(msg: any) {
+    if (this.streamWaiters.length) {
+      this.streamWaiters.shift()!({ done: false, value: msg })
+    } else {
+      this.streamBuf.push(msg)
+    }
+  }
+
+  finish(result: any) {
+    this.result = result
+    this.status = result?.status
+    this.ended = true
+    while (this.streamWaiters.length) {
+      this.streamWaiters.shift()!({ done: true })
+    }
+    while (this.resultWaiters.length) {
+      this.resultWaiters.shift()!(result)
+    }
+  }
+
+  fail(err: Error) {
+    this.ended = true
+    this.status = "error"
+    this.result = { status: "error", error: { message: err.message } }
+    while (this.streamWaiters.length) {
+      this.streamWaiters.shift()!({ done: true })
+    }
+    while (this.resultWaiters.length) {
+      this.resultWaiters.shift()!(this.result)
+    }
+  }
+
+  async *stream() {
+    for (;;) {
+      if (this.streamBuf.length) {
+        yield this.streamBuf.shift()
+        continue
+      }
+      if (this.ended) return
+      const next = await new Promise<{ done: boolean; value?: any }>((res) => {
+        this.streamWaiters.push(res)
+      })
+      if (next.done) return
+      yield next.value
+    }
+  }
+
+  wait() {
+    if (this.ended) return Promise.resolve(this.result)
+    return new Promise((res) => this.resultWaiters.push(res))
+  }
+
+  async cancel() {
+    try {
+      await sdkHost.call("cancel", { runId: this.reqId })
+    } catch {}
+  }
+
+  constructor(readonly reqId: string) {}
+}
+
+class HostAgent {
+  constructor(readonly agentId: string) {}
+
+  async send(message: string | { text: string; images?: any[] }, options?: any) {
+    const text = typeof message === "string" ? message : message.text
+    const images = typeof message === "string" ? [] : (message.images ?? [])
+    const reqId = "h" + (++sdkHost.seq)
+    const run = new HostRun(reqId)
+    sdkHost.sendRun(
+      {
+        agentId: this.agentId,
+        text,
+        images,
+        model: options?.model,
+        streamingBehavior: options?.streamingBehavior,
+        force: !!options?.local?.force,
+      },
+      {
+        onDelta: options?.onDelta
+          ? (update: any) => options.onDelta({ update })
+          : undefined,
+        run,
+      },
+    )
+    return run
+  }
+
+  close() {
+    sdkHost.call("close", { agentId: this.agentId }).catch(() => {})
+  }
+
+  async reload() {}
+}
+
+const sdkHost = {
+  child: null as ChildProcess | null,
+  pending: new Map<string, HostPending>(),
+  seq: 0,
+
+  spawn() {
+    this.kill()
+    const child = fork(SDK_HOST_PATH, [], {
+      execArgv: [],
+      env: { ...process.env, PI_CURSOR_SDK_ENTRY: SDK_MODULE_PATH },
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+    })
+    child.stderr?.on("data", (buf) => {
+      const s = String(buf).trim()
+      if (s) piLog("warn", "sdk-host:", s.slice(0, 400))
+    })
+    child.on("message", (msg: any) => this.onMessage(msg))
+    child.on("error", (e) => {
+      piLog("error", "sdk-host spawn error:", e.message)
+      if (this.child === child) this.child = null
+    })
+    child.on("exit", (code, signal) => {
+      if (this.child === child) this.child = null
+      const err = new Error(`sdk-host exited code=${code} signal=${signal}`)
+      for (const [, p] of this.pending) p.reject(err)
+      this.pending.clear()
+    })
+    this.child = child
+    piLog("info", "sdk-host spawned pid=" + child.pid)
+  },
+
+  kill() {
+    const child = this.child
+    this.child = null
+    if (!child) return
+    try {
+      child.removeAllListeners()
+      child.kill("SIGKILL")
+    } catch {}
+  },
+
+  async restart() {
+    closeAllActiveAgents()
+    this.spawn()
+    await this.call("ping", {})
+    piLog("info", "sdk-host ready (fresh Node process, fresh Cursor token cache)")
+  },
+
+  ensure() {
+    if (this.child?.connected) return
+    this.spawn()
+  },
+
+  onMessage(msg: any) {
+    if (msg?.op === "fatal") {
+      piLog("error", "sdk-host fatal:", msg.error)
+      return
+    }
+    const p = this.pending.get(msg?.id)
+    if (!p) return
+    if (msg.kind === "delta") {
+      p.onDelta?.(msg.update)
+      return
+    }
+    if (msg.kind === "stream") {
+      p.streamPush?.(msg.msg)
+      return
+    }
+    this.pending.delete(msg.id)
+    if (msg.ok) {
+      p.streamEnd?.()
+      p.resolve(msg)
+    } else {
+      const e = new Error(msg.error?.message || "sdk-host error")
+      ;(e as any).code = msg.error?.code
+      e.name = msg.error?.name || "Error"
+      p.reject(e)
+    }
+  },
+
+  call(op: string, payload: any): Promise<any> {
+    this.ensure()
+    const id = "h" + (++this.seq)
+    const timeoutMs = op === "send" ? 15 * 60 * 1000 : 30_000
+    return new Promise((resolve, reject) => {
+      if (!this.child?.connected) {
+        reject(new Error("sdk-host not connected"))
+        return
+      }
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error("sdk-host timeout op=" + op))
+      }, timeoutMs)
+      this.pending.set(id, {
+        resolve: (v) => {
+          clearTimeout(timer)
+          resolve(v)
+        },
+        reject: (e) => {
+          clearTimeout(timer)
+          reject(e)
+        },
+      })
+      this.child.send({ id, op, payload })
+    })
+  },
+
+  sendRun(
+    payload: any,
+    hooks: { onDelta?: (u: any) => void; run: HostRun },
+  ): string {
+    this.ensure()
+    const id = hooks.run.reqId
+    const run = hooks.run
+    this.pending.set(id, {
+      resolve: (msg) => run.finish(msg.result),
+      reject: (e) => run.fail(e instanceof Error ? e : new Error(String(e))),
+      onDelta: hooks.onDelta,
+      streamPush: (m) => run.pushStream(m),
+      streamEnd: () => {},
+    })
+    if (!this.child?.connected) {
+      run.fail(new Error("sdk-host not connected"))
+      return id
+    }
+    this.child.send({ id, op: "send", payload })
+    return id
+  },
+}
+
+const sdkAgent = {
+  async create(opts: any) {
+    const r = await sdkHost.call("create", opts)
+    return new HostAgent(r.agentId)
+  },
+  async resume(agentId: string, opts: any) {
+    const r = await sdkHost.call("resume", { agentId, opts })
+    return new HostAgent(r.agentId)
+  },
+  async listRuns(agentId: string, opts: any) {
+    const r = await sdkHost.call("listRuns", { agentId, opts })
+    return r.result
+  },
+  messages: {
+    async list(agentId: string, opts: any) {
+      const r = await sdkHost.call("messagesList", { agentId, opts })
+      return r.result
+    },
+  },
+}
 
 async function reloadSdk(): Promise<boolean> {
   try {
-    const fresh = await import(`${SDK_MODULE_PATH}?v=${Date.now()}`)
-    sdkAgent = fresh.Agent
-    sdkAuthenticationError = fresh.AuthenticationError
-    sdkModule = fresh
-    piLog("info", "SDK module reloaded via cache-busting import; fresh token cache")
+    await sdkHost.restart()
     return true
   } catch (e: any) {
-    piLog("warn", "SDK reload failed:", e?.message || String(e))
+    piLog("warn", "sdk-host restart failed:", e?.message || String(e))
     return false
   }
 }
@@ -67,11 +341,31 @@ type ActiveAgentEntry = {
   agent: CursorSdkAgent
   agentId: string
   lastUsed: number
+  tokenAt: number
   cwd: string
   sessionId: string
 }
 
+function makeAgentEntry(
+  agent: CursorSdkAgent,
+  agentId: string,
+  cwd: string,
+  sessionId: string,
+): ActiveAgentEntry {
+  const now = Date.now()
+  return { agent, agentId, lastUsed: now, tokenAt: now, cwd, sessionId }
+}
+
 const activeAgents = new Map<string, ActiveAgentEntry>()
+
+function closeAllActiveAgents(): void {
+  for (const [sk, entry] of [...activeAgents]) {
+    try {
+      entry.agent.close()
+    } catch {}
+    activeAgents.delete(sk)
+  }
+}
 const stuckAgentIds = new Set<string>()
 const AGENTS_FILE = ".pi/cursor-agents.json"
 const sessionCwds = new Map<string, string>()
@@ -775,6 +1069,8 @@ function hasThinkingOrToolOutput(state: DeltaStreamState): boolean {
 
 const AUTH_RESULT_RE = /authenticat|unauthenticated|invalid.*key|session.*expired|logged?\s*(in|out)/i
 const AUTH_RETRY_BACKOFF_MS = [3_000, 9_000, 25_000]
+const MAX_AUTH_PARK_ATTEMPTS = 3
+const SDK_TOKEN_MAX_AGE_MS = 50 * 60 * 1000
 const SDK_ENABLE_AGENT_RETRIES = true
 const AUTH_PARK_INTERVAL_MS = 60_000
 
@@ -812,6 +1108,15 @@ function openResourceExhaustedCircuit(sk: string, hintMs?: number): number {
   const until = Date.now() + Math.max(RESOURCE_EXHAUSTED_CIRCUIT_MS, hintMs ?? 0)
   resourceExhaustedUntil.set(sk, until)
   return until
+}
+
+function resourceExhaustedPauseMessage(detail: string, circuitUntil: number, sk: string): string {
+  let remainingSec = Math.ceil((circuitUntil - Date.now()) / 1000)
+  if (remainingSec <= 0) {
+    const until = openResourceExhaustedCircuit(sk)
+    remainingSec = Math.max(1, Math.ceil((until - Date.now()) / 1000))
+  }
+  return `Cursor resource exhausted: ${detail}. This chat/model is paused for ${remainingSec}s; other chats remain available.`
 }
 
 async function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
@@ -853,17 +1158,25 @@ async function probeFreshAgentAuth(
   const work = (async () => {
     try {
       probe = await createAgent()
-      const run = await probe.send("", { model: modelSel, streamingBehavior: "steer" } as any)
+      const run = await probe.send("", { model: modelSel, streamingBehavior: "followUp" } as any)
       for await (const _ of run.stream()) {}
       const result = await run.wait()
-      return result?.status === "finished"
-    } catch {
+      if (result?.status === "finished") return true
+      const msg = result?.error?.message ?? ""
+      piLog(
+        "warn",
+        `Auth probe non-finished: status=${result?.status ?? "?"} msg=${msg.slice(0, 160)}`,
+      )
+      return false
+    } catch (e: any) {
+      piLog("warn", "Auth probe failed:", e?.message || String(e))
       return false
     }
   })()
   try {
     return await Promise.race([work, abortRej])
-  } catch {
+  } catch (e: any) {
+    piLog("warn", "Auth probe aborted/raced:", e?.message || String(e))
     return false
   } finally {
     try { probe?.close() } catch {}
@@ -1169,7 +1482,15 @@ export default async function (pi: ExtensionAPI) {
   const apiKey = getApiKey()
   if (!apiKey) { piLog("warn", "No API key — provider NOT registered"); return }
 
-  const { Cursor } = await import("@cursor/sdk")
+  if (!(await reloadSdk())) {
+    piLog("error", "Failed to load @cursor/sdk — provider NOT registered")
+    return
+  }
+  const Cursor = sdkModule.Cursor
+  if (!Cursor?.models?.list) {
+    piLog("error", "Cursor.models.list missing after SDK load — provider NOT registered")
+    return
+  }
   let cursorModels: CursorModelEntry[] = []
   try {
     const models = await Promise.race([
@@ -1375,14 +1696,6 @@ async function warmUpAgent(
   resetHangTimer: (() => void) | undefined,
   createFreshAgent: () => Promise<CursorSdkAgent>,
 ): Promise<"ready" | "aborted" | "escalate"> {
-  if (await freshApiKeyWorks(apiKey)) {
-    piLog("warn", "Warm-up: fresh API-key exchange works while SDK keeps rejecting auth -> SDK cached token stale; reloading SDK module")
-    if (await reloadSdk()) {
-      piLog("info", "SDK reloaded during warm-up; escalating to a fresh agent with new token cache")
-      return "escalate"
-    }
-    piLog("warn", "SDK reload failed during warm-up; continuing parked warm-up")
-  }
   for (let attempt = 1; ; attempt++) {
     if (localAbort.signal.aborted) return "aborted"
     resetHangTimer?.()
@@ -1402,7 +1715,9 @@ async function warmUpAgent(
       if (!isAuthLikeError(e)) return "ready"
       piLog("warn", `Warm-up auth error (attempt ${attempt}), still waiting for Cursor auth...`)
     }
-    if (parked && await probeFreshAgentAuth(createFreshAgent, modelSel, abortRej)) return "escalate"
+    if (parked && await probeFreshAgentAuth(createFreshAgent, modelSel, abortRej)) {
+      return "escalate"
+    }
     const waitMs = parked ? AUTH_PARK_INTERVAL_MS : WARMUP_BACKOFF_MS[attempt - 1]
     try {
       await waitForRetry(waitMs, localAbort.signal)
@@ -1451,20 +1766,34 @@ async function recoverFromAuthError(args: {
   let lastError = args.initialError
   let canResume = !!savedId && !stuckAgentIds.has(savedId)
   let agentEntry: ActiveAgentEntry | undefined
-
-  const apiKey0 = resolveApiKey()
-  if (apiKey0 && await freshApiKeyWorks(apiKey0)) {
-    piLog("warn", "Fresh API-key exchange works while SDK keeps rejecting auth -> SDK cached access token is stale (TTL 1h, no refresh); reloading SDK module for a fresh token cache")
-    if (await reloadSdk()) {
-      canResume = false
-      piLog("info", "SDK reloaded; retrying immediately with fresh token cache")
-    } else {
-      piLog("warn", "SDK reload failed; keeping park-and-retry")
-    }
+  let sendPayload = text
+  piLog("warn", "Auth error: restarting sdk-host (fresh Node process)...")
+  try {
+    await sdkHost.restart()
+  } catch (e: any) {
+    piLog("warn", "sdk-host restart failed:", e?.message || String(e))
   }
+  const createFresh = (apiKey: string) =>
+    sdkAgent.create({
+      apiKey,
+      model: modelSel,
+      local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES },
+    })
 
   for (let attempt = 1; ; attempt++) {
     const parked = attempt > AUTH_RETRY_BACKOFF_MS.length
+    if (parked && attempt > AUTH_RETRY_BACKOFF_MS.length + MAX_AUTH_PARK_ATTEMPTS) {
+      const key = resolveApiKey()
+      const keyOk = key ? await freshApiKeyWorks(key) : false
+      if (keyOk) {
+        lastError = "Cursor backend kept rejecting auth; API key is valid. Retry the message."
+      }
+      piLog(
+        "error",
+        `Auth recovery gave up after ${attempt - 1} attempts. keyExchangeOk=${keyOk}`,
+      )
+      return { ok: false, lastError, agentEntry }
+    }
     const backoffMs = parked ? AUTH_PARK_INTERVAL_MS : AUTH_RETRY_BACKOFF_MS[attempt - 1]
     piLog("warn", parked
       ? `Auth still rejected, parked; probing again in ${backoffMs / 1000}s (attempt ${attempt})...`
@@ -1483,7 +1812,7 @@ async function recoverFromAuthError(args: {
       try {
         piLog("warn", "Trying sdkAgent.resume to preserve memory...")
         agent = await sdkAgent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
-        agentEntry = { agent, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
+        agentEntry = makeAgentEntry(agent, savedId, cwd, sessionId)
       } catch (resumeErr: any) {
         piLog("warn", "Resume failed, falling back to sdkAgent.create:", resumeErr?.message || resumeErr)
         try {
@@ -1500,8 +1829,8 @@ async function recoverFromAuthError(args: {
     }
     if (!agent) {
       try {
-        agent = await sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
-        agentEntry = { agent, agentId: agent.agentId, lastUsed: Date.now(), cwd, sessionId }
+        agent = await createFresh(apiKey)
+        agentEntry = makeAgentEntry(agent, agent.agentId, cwd, sessionId)
         const state = loadAgentState(cwd)
         state.agents[sk] = agent.agentId
         saveAgentState(cwd, state)
@@ -1515,7 +1844,7 @@ async function recoverFromAuthError(args: {
     activeAgents.set(sk, agentEntry!)
     try {
       await retrySendWithAgent(agent, {
-        text, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk,
+        text: sendPayload, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk,
       })
       piLog("info", `Auth recovery succeeded on attempt ${attempt}`)
       return { ok: true, agentEntry }
@@ -1529,7 +1858,7 @@ async function recoverFromAuthError(args: {
       }
       if (parked && canResume && savedId
           && await probeFreshAgentAuth(
-            () => sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } }),
+            () => createFresh(apiKey),
             modelSel, abortRej)) {
         piLog("warn", "Fresh agent auth probe passed while the resumed session keeps being rejected; abandoning the dead session...")
         stuckAgentIds.add(savedId)
@@ -1538,71 +1867,6 @@ async function recoverFromAuthError(args: {
     }
     releaseAgent(sk, agentEntry)
     agentEntry = undefined
-  }
-}
-
-const RESOURCE_FALLBACK_MODEL = "composer-2.5"
-
-async function attemptResourceFallback(args: {
-  currentModelId: string
-  text: string
-  images: { data: string; mimeType: string }[]
-  fallbackContext: string
-  deltaState: DeltaStreamState
-  st: AssistantMessageEventStream
-  localAbort: AbortController
-  abortRej: Promise<never>
-  apiKey: string
-  cwd: string
-  sessionId: string
-}): Promise<boolean> {
-  const {
-    currentModelId, text, images, fallbackContext, deltaState, st,
-    localAbort, abortRej, apiKey, cwd, sessionId,
-  } = args
-  if (currentModelId === RESOURCE_FALLBACK_MODEL) return false
-  const fb = paramRegistry.get(RESOURCE_FALLBACK_MODEL)
-  if (!fb) return false
-  if (images.length) return false
-  if (localAbort.signal.aborted) return false
-  const fsk = cwd + "|" + sessionId + "|" + fb.modelId
-  if ((resourceExhaustedUntil.get(fsk) ?? 0) > Date.now()) return false
-  try {
-    piLog("warn", `Resource exhausted on ${currentModelId}, falling back to ${RESOURCE_FALLBACK_MODEL}...`)
-    const fbModelSel: { id: string; params?: CursorParam[] } = { id: fb.modelId }
-    if (fb.params?.length) fbModelSel.params = fb.params
-    let fEntry = activeAgents.get(fsk)
-    let fresh = false
-    if (!fEntry) {
-      const savedId = loadAgentState(cwd).agents[fsk]
-      if (savedId && !stuckAgentIds.has(savedId)) {
-        try {
-          const resumed = await sdkAgent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
-          fEntry = { agent: resumed, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
-        } catch {}
-      }
-    }
-    if (!fEntry) {
-      const agent = await sdkAgent.create({ apiKey, model: fbModelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
-      fEntry = { agent, agentId: agent.agentId, lastUsed: Date.now(), cwd, sessionId }
-      const state = loadAgentState(cwd)
-      state.agents[fsk] = agent.agentId
-      saveAgentState(cwd, state)
-      fresh = true
-    }
-    fEntry.lastUsed = Date.now()
-    activeAgents.set(fsk, fEntry)
-    const fbText = fresh && fallbackContext ? fallbackContext + text : text
-    await retrySendWithAgent(fEntry.agent, {
-      text: fbText, images, modelSel: fbModelSel, deltaState, st,
-      localAbort, abortRej, apiKey, cwd, sessionId, sk: fsk,
-    })
-    piLog("info", `Fallback to ${RESOURCE_FALLBACK_MODEL} answered the turn`)
-    return true
-  } catch (e: any) {
-    piLog("warn", `Fallback to ${RESOURCE_FALLBACK_MODEL} failed:`, e instanceof Error ? e.message : String(e))
-    if (!localAbort.signal.aborted && isResourceExhaustedError(e)) openResourceExhaustedCircuit(fsk)
-    return false
   }
 }
 
@@ -1714,10 +1978,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
 
       const circuitUntil = resourceExhaustedUntil.get(sk) ?? 0
       if (circuitUntil > Date.now()) {
-        if (await attemptResourceFallback({
-          currentModelId: m.id, text, images, fallbackContext,
-          deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId,
-        })) return
         const retryInSeconds = Math.max(1, Math.ceil((circuitUntil - Date.now()) / 1000))
         g.stopReason = "error"
         g.errorMessage = `Cursor resource exhausted for this chat/model. Retry in ${retryInSeconds}s; other chats remain available.`
@@ -1744,7 +2004,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
                 localAbort.signal.addEventListener("abort", () => rej(new Error("aborted")), { once: true })
               })
             ])
-            agentEntry = { agent: resumed, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
+            agentEntry = makeAgentEntry(resumed, savedId, cwd, sessionId)
             activeAgents.set(sk, agentEntry)
           } catch (err: any) {
             const isAuthError = err instanceof AuthenticationError || err?.code === 16 || /unauthenticated/i.test(err?.message ?? "")
@@ -1761,7 +2021,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
                       localAbort.signal.addEventListener("abort", () => rej(new Error("aborted")), { once: true })
                     })
                   ])
-                  agentEntry = { agent: freshResumed, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
+                  agentEntry = makeAgentEntry(freshResumed, savedId, cwd, sessionId)
                   activeAgents.set(sk, agentEntry)
                   piLog("info", "Agent resume succeeded after auth retry")
                 } catch (freshErr: any) {
@@ -1781,8 +2041,20 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       }
       if (agentEntry) {
         const idleMs = Date.now() - agentEntry.lastUsed
-        if (idleMs > AGENT_MAX_IDLE_MS) {
-          piLog("info", "Agent idle-expired after " + Math.round(idleMs / 1000) + "s, resuming from disk...")
+        const tokenMs = Date.now() - agentEntry.tokenAt
+        const idleExpired = idleMs > AGENT_MAX_IDLE_MS
+        const tokenAged = tokenMs > SDK_TOKEN_MAX_AGE_MS
+        if (idleExpired || tokenAged) {
+          if (idleExpired) {
+            piLog("info", "Agent idle-expired after " + Math.round(idleMs / 1000) + "s, resuming from disk...")
+          } else {
+            piLog(
+              "info",
+              "SDK access token aged " + Math.round(tokenMs / 1000)
+                + "s (JWT TTL ~1h); restarting sdk-host...",
+            )
+            await sdkHost.restart()
+          }
           try { agentEntry.agent.close() } catch {}
           activeAgents.delete(sk)
           agentEntry = undefined
@@ -1798,7 +2070,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
                   localAbort.signal.addEventListener("abort", () => rej(new Error("aborted")), { once: true })
                 })
               ])
-              agentEntry = { agent: resumed, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
+              agentEntry = makeAgentEntry(resumed, savedId, cwd, sessionId)
               activeAgents.set(sk, agentEntry)
               piLog("info", "Agent resumed from disk after idle expiry")
             } catch (err: any) {
@@ -1816,7 +2088,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
                         localAbort.signal.addEventListener("abort", () => rej(new Error("aborted")), { once: true })
                       })
                     ])
-                    agentEntry = { agent: freshResumed, agentId: savedId, lastUsed: Date.now(), cwd, sessionId }
+                    agentEntry = makeAgentEntry(freshResumed, savedId, cwd, sessionId)
                     activeAgents.set(sk, agentEntry)
                     piLog("info", "Idle-expired agent resume succeeded after auth retry")
                   } catch (freshErr: any) {
@@ -1843,7 +2115,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
               localAbort.signal.addEventListener("abort", () => rej(new Error("aborted")), { once: true })
             })
           ])
-          agentEntry = { agent, agentId: agent.agentId, lastUsed: Date.now(), cwd, sessionId }
+          agentEntry = makeAgentEntry(agent, agent.agentId, cwd, sessionId)
           activeAgents.set(sk, agentEntry)
           agentIsFresh = true
           { const st = loadAgentState(cwd); st.agents[sk] = agent.agentId; saveAgentState(cwd, st) }
@@ -1863,7 +2135,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
                     localAbort.signal.addEventListener("abort", () => rej(new Error("aborted")), { once: true })
                   })
                 ])
-                agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
+                agentEntry = makeAgentEntry(freshAgent, freshAgent.agentId, cwd, sessionId)
                 activeAgents.set(sk, agentEntry)
                 agentIsFresh = true
                 { const st = loadAgentState(cwd); st.agents[sk] = freshAgent.agentId; saveAgentState(cwd, st) }
@@ -1904,7 +2176,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           priorSavedId = agentEntry.agentId
           evictAgent(sk, cwd, agentEntry)
           const freshAgent = await sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
-          agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
+          agentEntry = makeAgentEntry(freshAgent, freshAgent.agentId, cwd, sessionId)
           activeAgents.set(sk, agentEntry)
           const state = loadAgentState(cwd)
           state.agents[sk] = freshAgent.agentId
@@ -1991,13 +2263,8 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         const circuitUntil = openResourceExhaustedCircuit(sk)
         releaseAgent(sk, agentEntry)
         agentEntry = undefined
-        if (await attemptResourceFallback({
-          currentModelId: m.id, text, images, fallbackContext,
-          deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId,
-        })) return
-        const retryInSeconds = Math.ceil((circuitUntil - Date.now()) / 1000)
         g.stopReason = "error"
-        g.errorMessage = `Cursor resource exhausted: ${result?.error?.message || ""}. This chat/model is paused for ${retryInSeconds}s; other chats remain available.`
+        g.errorMessage = resourceExhaustedPauseMessage(result?.error?.message || "", circuitUntil, sk)
         st.push({ type: "error", reason: "error", error: g })
         st.end()
         return
@@ -2014,7 +2281,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         evictAgent(sk, cwd, agentEntry)
         try {
           const freshAgent = await sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
-          agentEntry = { agent: freshAgent, agentId: freshAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
+          agentEntry = makeAgentEntry(freshAgent, freshAgent.agentId, cwd, sessionId)
           activeAgents.set(sk, agentEntry)
           const st2 = loadAgentState(cwd); st2.agents[sk] = freshAgent.agentId; saveAgentState(cwd, st2)
           let freshSeed = ""
@@ -2076,13 +2343,12 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         const circuitUntil = openResourceExhaustedCircuit(sk, serverRetryMs)
         releaseAgent(sk, agentEntry)
         agentEntry = undefined
-        if (await attemptResourceFallback({
-          currentModelId: m.id, text, images, fallbackContext,
-          deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId,
-        })) return
-        const retryInSeconds = Math.ceil((circuitUntil - Date.now()) / 1000)
         g.stopReason = "error"
-        g.errorMessage = `Cursor resource exhausted: ${(sdkErr as any)?.message || (error as any)?.message || "capacity unavailable"}. This chat/model is paused for ${retryInSeconds}s; other chats remain available.`
+        g.errorMessage = resourceExhaustedPauseMessage(
+          (sdkErr as any)?.message || (error as any)?.message || "capacity unavailable",
+          circuitUntil,
+          sk,
+        )
         st.push({ type: "error", reason: "error", error: g })
         st.end()
         return
@@ -2137,12 +2403,12 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
             if (calmSavedId && !stuckAgentIds.has(calmSavedId)) {
               try {
                 retryAgent = await sdkAgent.resume(calmSavedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
-                agentEntry = { agent: retryAgent, agentId: calmSavedId, lastUsed: Date.now(), cwd, sessionId }
+                agentEntry = makeAgentEntry(retryAgent, calmSavedId, cwd, sessionId)
               } catch { retryAgent = null }
             }
             if (!retryAgent) {
               retryAgent = await sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
-              agentEntry = { agent: retryAgent, agentId: retryAgent.agentId, lastUsed: Date.now(), cwd, sessionId }
+              agentEntry = makeAgentEntry(retryAgent, retryAgent.agentId, cwd, sessionId)
             }
             activeAgents.set(sk, agentEntry)
             await retrySendWithAgent(retryAgent, { text: sendText, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk })
@@ -2225,12 +2491,12 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
             if (m1SavedId && !stuckAgentIds.has(m1SavedId)) {
               try {
                 m1Agent = await sdkAgent.resume(m1SavedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
-                agentEntry = { agent: m1Agent, agentId: m1SavedId, lastUsed: Date.now(), cwd, sessionId }
+                agentEntry = makeAgentEntry(m1Agent, m1SavedId, cwd, sessionId)
               } catch { m1Agent = null }
             }
             if (!m1Agent) {
               m1Agent = await sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
-              agentEntry = { agent: m1Agent, agentId: m1Agent.agentId, lastUsed: Date.now(), cwd, sessionId }
+              agentEntry = makeAgentEntry(m1Agent, m1Agent.agentId, cwd, sessionId)
             }
             activeAgents.set(sk, agentEntry)
             await retrySendWithAgent(m1Agent, { text: sendText, images, modelSel, deltaState, st, localAbort, abortRej, apiKey, cwd, sessionId, sk })
