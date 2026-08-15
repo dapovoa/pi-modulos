@@ -1,27 +1,37 @@
-pi-commit
+# pi-commit
 
-Generate Conventional Commit messages from git diff.
+`/commit` — generate [Conventional Commits](https://www.conventionalcommits.org/) messages from git diff.
 
-Install
+Sends the full staged (or unstaged) diff to a configured model and returns a single commit message in a code block. Does not run `git commit`.
 
-  mkdir -p ~/.pi/agent/extensions/pi-commit
-  cp extension.ts ~/.pi/agent/extensions/pi-commit/index.ts
-  cp config.json ~/.pi/agent/extensions/pi-commit/config.json
+## Usage
 
-Usage
+```
+/commit           # unstaged diff
+/commit --staged  # staged diff
+```
 
-  /commit          generate commit from unstaged diff
-  /commit --staged generate commit from staged diff
+## Config
 
-The diff is sent to the LLM, which returns a properly formatted
-Conventional Commit message ready for git commit -m.
+`config.json`:
 
-Model Configuration
+```json
+{ "model": "deepseek/deepseek-v4-flash" }
+```
 
-  Edit config.json to set which model /commit uses:
+If missing or the model is unavailable, `/commit` uses the current chat model.
 
-    { "model": "provider/model-id" }
+## Install
 
-  Example: { "model": "pi-nvidia/kimi-k2.6" }
+```bash
+EXT="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/extensions"
+mkdir -p "$EXT/pi-commit"
+cp extension.ts "$EXT/pi-commit/index.ts"
+cp config.json "$EXT/pi-commit/config.json"
+```
 
-  If config.json is missing, /commit uses the currently active model.
+Run `/reload` in pi.
+
+## Deploy (this monorepo)
+
+Edit `pi-modulos/pi-commit/`, copy to your runtime `extensions/pi-commit/`, `/reload`. See root [README](../README.md).

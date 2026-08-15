@@ -1,31 +1,39 @@
 # pi-cursor
 
-Cursor provider extension for [pi.dev](https://pi.dev). Uses `@cursor/sdk` for local agent execution with Cursor hosted models.
+Cursor provider for [pi.dev](https://pi.dev). Uses `@cursor/sdk` for local agent execution with Cursor-hosted models (Composer, Grok, Gemini, etc.).
 
 ## Install
 
-Copy `index.ts`, `package.json`, and `package-lock.json` into `.pi/agent/extensions/pi-cursor/` on the NVME pi install, then run:
-
 ```bash
-cd ~/.pi/agent/extensions/pi-cursor && npm install
+EXT="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/extensions"
+mkdir -p "$EXT/pi-cursor"
+cp index.ts package.json package-lock.json "$EXT/pi-cursor/"
+cd "$EXT/pi-cursor" && npm install
 ```
+
+Run `/reload` in pi.
 
 ## Auth
 
-Add to `.pi/agent/auth.json`:
+Add an API key to your pi agent `auth.json` (path: `$PI_CODING_AGENT_DIR/auth.json` or `~/.pi/agent/auth.json`):
 
 ```json
 {
-  "pi-cursor": { "type": "api_key", "key": "your-key" }
+  "pi-cursor": { "type": "api_key", "key": "YOUR_CURSOR_API_KEY" }
 }
 ```
 
-Get a key at https://cursor.com/dashboard/api
+Keys: [cursor.com/dashboard/api](https://cursor.com/dashboard/api)
 
-## Source of truth
+Enable models in `settings.json` (`enabledModels`), e.g. `pi-cursor/composer-2.5`.
 
-Canonical source: `pi-modulos/pi-cursor/` on the NVME drive.
+## Features
 
-Deployed runtime copy: `.pi/agent/extensions/pi-cursor/`.
+- Agent session management and streaming
+- Hang detection and auto-retry
+- Model catalog from Cursor API (`cursor-models.json` cache)
+- E2E probes: `e2e-sdk.mjs`, `watchdog-auth.sh`
 
-Canonical wiki: `pi-modulos/pi-cursor/.pi/memory/pages/cursor-provider.md`.
+## Deploy (this monorepo)
+
+Source of truth: `pi-modulos/pi-cursor/`. Copy changed files to runtime `extensions/pi-cursor/`, `npm install` if deps changed, `/reload`.

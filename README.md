@@ -3,33 +3,47 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![pi.dev](https://img.shields.io/badge/pi.dev-extension-8B5CF6?logo=eslint)](https://pi.dev)
-[![Modules](https://img.shields.io/badge/modules-9-4ade80)](.)
+[![Modules](https://img.shields.io/badge/modules-10-4ade80)](.)
 
 Collection of extensions for the [pi.dev](https://pi.dev) coding agent CLI — custom providers, tools, and safeguards.
+
+**Source of truth:** all development happens here in `pi-modulos/`. Copy verified changes to your pi agent extensions directory, then `/reload`.
+
+Agent dir defaults to `~/.pi/agent/` or `$PI_CODING_AGENT_DIR` when set (portable installs).
 
 ## Modules
 
 | Module | Type | Description |
 |---|---|---|
-| `pi-block` | Guard | Blocks dangerous shell commands and sensitive file reads with interactive confirmations |
-| `pi-code` | Provider | Command Code API provider with git-aware context injection |
-| `pi-commit` | Tool | Generates Conventional Commits from staged diffs using any configured model |
-| `pi-cursor` | Provider | Cursor SDK provider with agent session management, hang detection, and auto-retry |
-| `pi-kimi` | Provider | Kimi API provider with streaming, thinking, and tool call support |
-| `pi-mistral` | Provider + Tools | Mistral AI provider + `mistral_ocr` and `mistral_fim` tools |
-| `pi-nvidia` | Provider | Nvidia NIM provider with 10 models (Nemotron, Gemma, Kimi, DeepSeek, Qwen, etc.) |
-| `pi-qwencloud` | Provider | Qwen Cloud provider with 13 models (Qwen3.7 Max, DeepSeek V4, GLM-5.1, etc.) |
-| `pi-xiaomi` | Provider | Xiaomi MiMo Token Plan provider with explicit prompt cache key injection |
+| [`pi-block`](pi-block/README.md) | Guard | Blocks dangerous shell commands and sensitive file reads (Cursor hooks + pi confirmations) |
+| [`pi-code`](pi-code/README.md) | Provider | Command Code API provider with git-aware context injection |
+| [`pi-commit`](pi-commit/README.md) | Tool | `/commit` — Conventional Commits from staged diffs (`config.json` model; default `deepseek/deepseek-v4-flash`) |
+| [`pi-cursor`](pi-cursor/README.md) | Provider | Cursor SDK provider — agent sessions, hang detection, auto-retry, model catalog |
+| [`pi-kimi`](pi-kimi/README.md) | Provider | Moonshot Kimi API (streaming, thinking, tools) |
+| [`pi-mistral`](pi-mistral/README.md) | Provider + Tools | Mistral AI provider + `mistral_ocr` and `mistral_fim` tools |
+| [`pi-nvidia`](pi-nvidia/README.md) | Provider | Nvidia NIM — Nemotron, Gemma, Kimi, DeepSeek, Qwen, etc. |
+| [`pi-qwencloud`](pi-qwencloud/README.md) | Provider | Alibaba DashScope — Qwen3.7, DeepSeek V4, GLM-5.1, MiniMax, etc. |
+| [`pi-tools`](pi-tools/README.md) | Tool | `/comments`, `/clean`, `/formatter`, `/wiki`, `/bug`, `/duplication`, `/security`, `/performance`, `/dead` — dedicated model per skill |
+| [`pi-xiaomi`](pi-xiaomi/README.md) | Provider | Xiaomi MiMo Token Plan — prompt cache key injection |
 
-## Setup
+## Deploy workflow
 
-Each module is a standalone extension. Copy it to `~/.pi/agent/extensions/` or symlink:
+1. Edit in `pi-modulos/NAME/` (never treat the runtime extensions copy as source).
+2. Copy changed files to `$PI_CODING_AGENT_DIR/extensions/NAME/` (or `~/.pi/agent/extensions/NAME/`).
+3. Run `npm install` in the extension dir if `package.json` changed.
+4. Run `/reload` in pi.
+5. Commit from `pi-modulos/` only.
 
-```bash
-ln -s $(pwd)/pi-mistral ~/.pi/agent/extensions/pi-mistral
-```
+## Model selection
 
-Requires pi.dev CLI with extension support.
+- **pi-commit** — single model in `pi-commit/config.json`.
+- **pi-tools** — per-skill models in `pi-tools/config.json`.
+- **Providers** — enable models in `.pi/agent/settings.json` (`enabledModels`); auth in `.pi/agent/auth.json`.
+
+## Removed
+
+- `pi-commandcode` — deleted 2026-06-02 (models migrated to `pi-qwencloud` where applicable).
+- `pi-memory` — removed 2026-06-04 (redundant with pi built-in wiki injection).
 
 ---
 
