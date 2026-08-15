@@ -32,8 +32,9 @@ Enable models in `settings.json` (`enabledModels`), e.g. `pi-cursor/composer-2.5
 - Agent session management and streaming
 - Hang detection and auto-retry
 - Model catalog from Cursor API (`cursor-models.json` cache)
+- Project Cursor rules: copies `rules/*.mdc` to `<cwd>/.cursor/rules/` on session start
 - E2E probes: `e2e-sdk.mjs`, `watchdog-auth.sh`
 
 ## Deploy (this monorepo)
 
-Source of truth: `pi-modulos/pi-cursor/`. Copy changed files to runtime `extensions/pi-cursor/`, `npm install` if deps changed, `/reload`.
+Source of truth: `pi-modulos/pi-cursor/`. Copy changed files to runtime `extensions/pi-cursor/`, `npm install` if deps changed, `/reload`. Include `rules/*.mdc` when style/behavior rules change — they sync to each project on next pi session start.

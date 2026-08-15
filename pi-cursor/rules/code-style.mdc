@@ -19,6 +19,11 @@ how the surrounding code looks. Never copy the surrounding style when it is bad.
 - Blank lines between logical blocks. No 10+ consecutive lines with no blank line.
 - Do NOT fight the project formatter when it is configured (prettier/eslint/biome): run it, let it decide final whitespace. But if the formatter is NOT configured, use these rules as the standard.
 
+### Delivery (tool edits)
+- Never write compressed one-line blocks, collapsed indentation, or edits that squeeze multiple statements onto one line.
+- Every line you add or change must already be properly formatted before you finish — do not rely on a later formatter pass.
+- If an edit would be unreadable, split it into smaller blocks instead of shipping a messy patch.
+
 ### Structure
 - Functions: keep them short and single-purpose. If a function needs a comment to explain its job, it is too long - split it.
 - Max ~3 levels of indentation. If you need more, extract a helper function.
@@ -34,7 +39,7 @@ how the surrounding code looks. Never copy the surrounding style when it is bad.
 
 ### Changes
 - The code YOU touch becomes clean, even if the surrounding code is not. Do not leave your edit looking like the mess around it.
-- Format what you touch; never reformat unrelated files or unrelated blocks in the same file.
+- Format every line you add or change; never reformat unrelated files or unrelated blocks in the same file.
 - No dead code, commented-out blocks, or `console.log` leftovers in deliverables.
 - Deliver complete, working code: no stubs, TODOs, or "placeholder" branches unless the user asked for them.
 
