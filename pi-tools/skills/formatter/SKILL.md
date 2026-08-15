@@ -44,8 +44,8 @@ Take code that is hard to read (spaghetti, bad indentation, cramped or bloated s
 - Do not reorder statements, do not merge/split lines in ways that alter logic, do not add or remove code.
 
 ### Comments are NOT your job
-- Redundant comments, ghost lines, and docblock cleanup are the `comments` skill, not this one.
-- If you encounter redundant comments while formatting, leave them untouched and mention them in the summary so the user can run `comments` if they want them gone.
+- Comment removal is the `clean` skill, not this one.
+- If you encounter comments while formatting, leave them untouched and mention them in the summary so the user can run `clean` if they want them gone.
 - The only comment-related thing you may do is preserve their position exactly when re-indenting a block that contains them.
 
 ## What to remove (high-confidence duplication only)
@@ -57,7 +57,7 @@ Take code that is hard to read (spaghetti, bad indentation, cramped or bloated s
 ## What to NEVER do
 
 - Never change behavior, variable names, function signatures, control flow, or ordering.
-- Never invent code, add comments, remove comments, or "improve" the logic. (Comment cleanup belongs to the `comments` skill.)
+- Never invent code, add comments, remove comments, or "improve" the logic. (Comment cleanup belongs to the `clean` skill.)
 - Never move code between files or out of the block being formatted.
 - Never reformat unrelated files or unrelated blocks in the same file in one edit.
 - Never use the formatter pass as an excuse to refactor.

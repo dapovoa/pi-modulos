@@ -5,7 +5,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import type { Model } from "@earendil-works/pi-ai"
 
 let step = 0
-let activeCommand: "comments" | "clean" | "wiki" | "bug" | "duplication" | "security" | "formatter" | "performance" | "dead" | null = null
+let activeCommand: "clean" | "wiki" | "bug" | "duplication" | "security" | "formatter" | "performance" | "dead" | null = null
 let previousModel: Model<any> | null | undefined = null
 
 const AGENT_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
@@ -29,8 +29,7 @@ function loadSkillPrompt(skillName: string): string {
   return m ? m[1].trim() : raw.trim()
 }
 
-const COMMAND_NAMES: Record<string, "comments" | "clean" | "wiki" | "bug" | "duplication" | "security" | "formatter" | "performance" | "dead"> = {
-  comments: "comments",
+const COMMAND_NAMES: Record<string, "clean" | "wiki" | "bug" | "duplication" | "security" | "formatter" | "performance" | "dead"> = {
   clean: "clean",
   wiki: "wiki",
   bug: "bug",

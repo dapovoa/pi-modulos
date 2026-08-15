@@ -3,7 +3,26 @@ import { writeFileSync, unlinkSync, readFileSync, existsSync } from "node:fs"
 import { resolve } from "node:path"
 import type { ExtensionAPI, ExtensionCommandContext, Model } from "@earendil-works/pi-coding-agent"
 
-const PROMPT = `You are an expert at writing Git commits using Conventional Commits.
+const PUBLICATION_SAFE_RULES = `
+Publication-safe wording (always):
+- Describe what the change adds or improves, not what was removed or hidden.
+- Never mention: sanitization, cleanup for public, internal/private removal, redaction.
+- Never mention specific machine paths, usernames, or staging URLs that were replaced.
+- When paths become generic placeholders, write "clarify install paths" not "remove internal paths".
+- When internal-only sections disappear, write "update README" not "remove internal notes".
+- Exception: real security fixes in code may use security: or fix: with generic wording — never quote secret values.
+`
+
+const PUBLIC_MODE_RULES = `
+PUBLIC MODE (strict — this commit prepares content for a public audience):
+- Subject and body must read as if the repo was always public. No narrative of cleanup or preparation.
+- Frame every change as documentation, configuration, or product improvement.
+- Forbidden in subject and body: sanitize, scrub, redact, internal, private, bench, wiki cleanup, made safe, before push.
+- Good: "docs: add module READMEs and update pi-tools model config"
+- Bad: "docs: sanitize READMEs for public release" or "chore: remove internal paths"
+`
+
+const PROMPT_BASE = `You are an expert at writing Git commits using Conventional Commits.
 Analyze the changed files. Be realistic and precise.
 
 Format:
@@ -30,9 +49,20 @@ IMPORTANT:
 - This is a NEW commit with a DIFFERENT diff than any previous request.
 - Analyze ONLY the CHANGED FILES below. Never reuse a previous commit message.
 - If the diff is large, base the message on the most impactful changed files.
-
-CHANGED FILES:
 `
+
+function buildCommitPrompt(publicMode: boolean): string {
+  let prompt = PROMPT_BASE + PUBLICATION_SAFE_RULES
+  if (publicMode) {
+    prompt += PUBLIC_MODE_RULES
+  }
+  return prompt + "\nCHANGED FILES:\n"
+}
+
+function isPublicMode(args: string | undefined): boolean {
+  const tokens = (args ?? "").trim().split(/\s+/).filter(Boolean)
+  return tokens.includes("--public")
+}
 
 let step = 0
 let diffStat = ""
@@ -117,13 +147,13 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("commit", {
     description: "Generate Conventional Commit and apply",
     handler: async (args, ctx) => {
-      const staged = (args ?? "").trim() === "--staged"
+      const publicMode = isPublicMode(args)
       try {
         ctx.modelRegistry.refresh()
-        if (!staged) execSync("git add -A", { cwd: ctx.cwd, encoding: "utf-8", stdio: "pipe" })
+        execSync("git add -A", { cwd: ctx.cwd, encoding: "utf-8", stdio: "pipe" })
         const out = execSync("git diff --staged", { cwd: ctx.cwd, encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 }).trim()
         if (!out) {
-          if (!staged) execSync("git reset HEAD", { cwd: ctx.cwd, encoding: "utf-8", stdio: "pipe" })
+          execSync("git reset HEAD", { cwd: ctx.cwd, encoding: "utf-8", stdio: "pipe" })
           ctx.ui.notify("No changes.")
           return
         }
@@ -158,9 +188,13 @@ export default function (pi: ExtensionAPI) {
         }
         step = 1
         diffStat = buildDiffPrompt(ctx.cwd)
+        const prompt = buildCommitPrompt(publicMode)
+        if (publicMode) {
+          ctx.ui.notify("/commit --public: publication-safe message", "info")
+        }
         pi.sendMessage({
           customType: "pi-commit",
-          content: PROMPT + diffStat,
+          content: prompt + diffStat,
           display: false,
         })
         pi.sendUserMessage("Generate commit message for the changes.")

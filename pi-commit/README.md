@@ -2,14 +2,18 @@
 
 `/commit` — generate [Conventional Commits](https://www.conventionalcommits.org/) messages from git diff.
 
-Sends the full staged (or unstaged) diff to a configured model and returns a single commit message in a code block. Does not run `git commit`.
+Stages all changes (`git add -A`), sends the diff to a configured model, and returns a single commit message in a code block. Prompts before running `git commit`.
 
 ## Usage
 
 ```
-/commit           # unstaged diff
-/commit --staged  # staged diff
+/commit
+/commit --public
 ```
+
+`/commit` applies light publication-safe wording (no "sanitized for public" phrasing).
+
+Use `--public` when the diff removes internal paths, bench notes, or other prep before a public push — the message describes the **outcome** (e.g. "docs: add module READMEs"), not the cleanup.
 
 ## Config
 

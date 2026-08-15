@@ -8,7 +8,7 @@ Note: `summerize` is NOT here — it serves the pi chat model via `/skill:summer
 
 ## How it works
 
-- `/comments`, `/clean`, `/formatter`, `/wiki`, `/bug`, `/duplication`, `/security`, `/performance`, `/dead` are
+- `/clean`, `/formatter`, `/wiki`, `/bug`, `/duplication`, `/security`, `/performance`, `/dead` are
   extension commands (`pi.registerCommand`).
 - Each command reads the skill's `SKILL.md` from this extension's own
   `skills/<name>/SKILL.md` as the prompt (single source of truth — the skills
@@ -33,7 +33,6 @@ Never edit the runtime extensions copy without syncing back to `pi-modulos/`.
 
 ```json
 {
-  "comments": "deepseek/deepseek-v4-pro",
   "clean": "deepseek/deepseek-v4-flash",
   "formatter": "deepseek/deepseek-v4-flash",
   "wiki": "deepseek/deepseek-v4-flash",
@@ -48,7 +47,6 @@ Never edit the runtime extensions copy without syncing back to `pi-modulos/`.
 | Tier | Skills | Model | Notes |
 |------|--------|-------|-------|
 | Mechanical | clean, formatter, wiki | `deepseek/deepseek-v4-flash` | Fast/cheap |
-| Mechanical | comments | `deepseek/deepseek-v4-pro` | Higher precision on comment rules |
 | Technical | bug, duplication, security, performance, dead | `pi-cursor/grok-4.6` | Strong reasoning; Cursor agent tools |
 
 If a configured model is unavailable, pi-tools falls back to the current chat model
@@ -56,8 +54,7 @@ with a warning.
 
 ## Commands
 
-- `/comments [path...]` — remove redundant comments (frontend: zero comments; backend: keep business-rule comments)
-- `/clean [path...]` — remove ALL comments in own code; knowledge goes to the wiki
+- `/clean [path...]` — remove ALL comments in own code (frontend + backend); knowledge goes to wiki
 - `/formatter [path...]` — formatting and readability in small batches (no logic changes)
 - `/wiki` — audit local wiki vs code, preserve process/history
 - `/bug` — high-severity correctness bugs in recent commits

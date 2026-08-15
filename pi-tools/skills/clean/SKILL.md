@@ -1,69 +1,72 @@
 ---
 name: clean
-description: Removes ALL comments from the project's own source code - frontend AND backend - for clean, comment-free repos. Deletes narrative comments, docblocks, "why" comments, workarounds, TODOs and section banners. Preserves only license headers and vendor/third-party code. Knowledge from non-obvious comments is moved to the project wiki before deletion.
-use_when: The user wants a repo free of comments and cleanly formatted - own source code only, frontend and backend. More aggressive than the comments skill (which preserves "why" comments in backend code).
-guidelines: "1. REMOVE ALL: Delete every comment in the project's own code - frontend AND backend: narrative, docblocks, why-comments, workarounds, TODOs, section banners. 2. WIKI FIRST: Before deleting a non-obvious 'why' comment (decision, workaround, subtle behavior), record the knowledge in .pi/memory/log.md (one line) so it survives outside the code. 3. PRESERVE: license headers (legal) and vendor/third-party code (files with a license header, 'extract from ... source', Copyright, minified) - never touch those. 4. FILE SCOPE: never touch node_modules/, dist/, build output, generated files, .git, lockfiles; do not bypass .cursorignore with shell/rg. 5. SMALL BATCHES: one bounded block per edit (~30-40 lines max); if an edit fails, shrink and retry."
+description: Removes ALL comments from the project's own source code — frontend and backend — for comment-free repos. Deletes narrative comments, docblocks, why-comments, workarounds, TODOs, and section banners. Preserves license headers, TypeScript reference directives, build placeholders, and vendor code. Non-obvious knowledge is moved to the project wiki before deletion.
+use_when: The user wants zero comments in own source code (frontend forbidden; backend also comment-free). Use for incremental tidy or full-repo purge.
+guidelines: "1. REMOVE ALL: Delete every comment in own code — frontend AND backend. 2. WIKI FIRST: Before deleting a non-obvious why-comment, record it in .pi/memory/log.md. 3. PRESERVE: license headers, /// reference directives, build-time placeholders, vendor/third-party code. 4. COMMENTS ONLY: Never format, re-indent, or change logic — use formatter for that. 5. NO GHOST LINES: Remove empty lines left by deleted comments. 6. SMALL BATCHES: ~30-40 lines per edit; shrink and retry on failure."
 user-invocable: true
 tools: [Read, Edit, Write, Grep]
-last-refreshed: 2026-08-08
+last-refreshed: 2026-08-15
 ---
 
-You are a code-cleanup automation. You remove ALL comments from the project's own source code - both frontend and backend - leaving clean, comment-free repos. The knowledge in non-obvious comments is preserved by moving it to the project wiki first, never by keeping it in the code.
+You are a comment-removal automation. You delete ALL comments from the project's own source code — frontend and backend — leaving comment-free repos. Non-obvious knowledge moves to the project wiki first, never stays in code.
 
 ## Scope
 
-- Delete comments in the project's OWN source code: `.ts`, `.tsx`, `.js`, `.jsx`, `.vue`, `.svelte`, `.astro`, `.css`, `.scss`, `.py`, `.go`, etc. - both frontend and backend.
-- This is MORE aggressive than the `comments` skill: `comments` preserves "why" comments in backend code; `clean` deletes them all (after recording the knowledge in the wiki).
+- Delete comments only. Never touch code, formatting, indentation, or logic. Formatting is the `formatter` skill.
+- Own source: `.ts`, `.tsx`, `.js`, `.jsx`, `.vue`, `.svelte`, `.astro`, `.css`, `.scss`, `.py`, `.go`, `.sql`, etc.
+- **Frontend hard rule:** any file that ships to the browser (`.tsx`, `.jsx`, `.vue`, `.svelte`, `.astro`, UI `.ts`/`.js`, bundled `.css`/`.scss`, HTML) — zero comments, no exceptions.
 
-## What to delete (everything, in own code)
+## What to delete (everything in own code)
 
 - Narrative comments (`// increment counter` above `counter++`).
-- Docblocks that restate the function name.
+- Docblocks that restate the function name or field list.
 - Section banners (`// === X ===`, `// ----`, ASCII dividers).
-- "Why" comments: workarounds, root causes, subtle SDK behavior, decisions, performance notes.
+- Why comments: workarounds, root causes, subtle SDK behavior, decisions, performance notes.
 - TODOs, FIXMEs, inline notes.
 - Completely commented-out code blocks.
 
 ## What to PRESERVE (never touch)
 
-1. **License headers** - legal requirement (`// Copyright ...`, `SPDX-License-Identifier`, the project's license header convention). Keep them intact.
-2. **Vendor / third-party code** - even inside `src/`: files with a license header, "extract from ... source", "Copyright ... Authors", bundled/minified third-party code. Do NOT touch them (their comments belong to the upstream author).
-3. **Files NOT owned by the project**: `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles, or the REST of `.pi/` outside the wiki (never `.pi/cursor-agents.json`, `.pi/pi-block-state.json`, `.pi/agent/` - provider state, global config with credentials). `.pi/memory/` (the wiki) is yours to edit - register findings there. Do not bypass `.cursorignore` with shell/rg.
+1. **License headers** — `// Copyright ...`, `SPDX-License-Identifier`, project license convention.
+2. **TypeScript reference directives** — `/// <reference types="..." />` (required for typing; not narrative comments).
+3. **Build-time placeholders** — strings like `/*__PUSH_NOTIFICATION_DISPLAY__*/` replaced during build; removing them breaks the build.
+4. **Auto-generated file headers** — e.g. `/** Auto-generated — do not edit */` on generated files; do not edit generated files at all.
+5. **Vendor / third-party code** — files with a license header, "extract from ... source", "Copyright ... Authors", bundled/minified third-party code.
+6. **Files NOT owned by the project:** `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles, or the REST of `.pi/` outside the wiki (never `.pi/cursor-agents.json`, `.pi/pi-block-state.json`, `.pi/agent/`). `.pi/memory/` is yours to edit. Do not bypass `.cursorignore` with shell/rg.
 
-## Wiki-first rule (the safety net)
+## Wiki-first rule (safety net)
 
-Before deleting a non-obvious "why" comment (a workaround, a subtle decision, a documented root cause, an SDK gotcha), record the knowledge in the project wiki so it survives outside the code:
+Before deleting a non-obvious why-comment, record the knowledge in the project wiki:
 
-- Add one line to `.pi/memory/log.md`: `## <date> - comments cleaned: <file>: <the knowledge>`.
-- Do this BEFORE deleting, so nothing is lost.
-- Obvious narrative comments (`// increment x`) need no wiki entry - they carry no knowledge.
+- Add one line to `.pi/memory/log.md`: `## <date> - clean: <file>: <the knowledge>`.
+- For large mappings (e.g. env bindings), create or update a `.pi/memory/pages/` page and link from `index.md`.
+- Do this BEFORE deleting.
+- Obvious narrative comments need no wiki entry.
 
-This is what makes `clean` safe: the repo becomes comment-free AND the knowledge is preserved in the wiki.
+## How to delete (no ghost lines)
 
-## File scope (never touch)
-
-- `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles, or the REST of `.pi/` outside the wiki (never `.pi/cursor-agents.json`, `.pi/pi-block-state.json`, `.pi/agent/` - provider state, global config with credentials). `.pi/memory/` (the wiki) is yours to edit - register findings there.
-- The tools already respect `.cursorignore` - do NOT bypass it with shell/rg to reach ignored directories.
-- Vendor/third-party code as defined above.
+1. Delete the ENTIRE physical comment line — not just the comment text.
+2. Collapse ghost lines: remove empty lines the comment left behind.
+3. Keep at most ONE blank line between distinct logical blocks.
+4. Never reformat remaining code beyond removing ghost lines.
 
 ## Small edits
 
 - One bounded block per Edit (~30-40 lines max).
-- If an Edit fails (context mismatch, tool error), shrink the block and retry - never push a large edit through a failing tool.
-- After removing a comment, remove the ghost blank line it leaves (no empty lines where the comment was).
+- If an Edit fails, shrink the block and retry.
+- Never push a large edit through a failing tool.
 
 ## Execution protocol
 
-1. **Scan** the project's own source files (skip vendor, skip ignored dirs).
-2. **Wiki-first:** for each non-obvious "why" comment, record the knowledge in `.pi/memory/log.md` first.
-3. **Delete** comments block by block, preserving license headers.
-4. **Verify** with grep that only license headers and vendor comments remain.
+1. **Scan** own source files (skip vendor, skip ignored dirs).
+2. **Wiki-first** for each non-obvious why-comment.
+3. **Delete** comments block by block.
+4. **Verify** with grep — only preserved items above should remain.
 5. **Report:** files cleaned, comments removed, knowledge moved to wiki.
 
 ## Output
 
 - Files cleaned and number of comments removed
-- Knowledge moved to the wiki (list of log entries added)
-- Anything preserved (license headers, vendor files) and why
-- All in English, except when directly quoting content.
-- Delivered as working-tree changes - never committed automatically.
+- Knowledge moved to the wiki (log entries and pages)
+- Anything preserved and why
+- Delivered as working-tree changes — never committed automatically.
