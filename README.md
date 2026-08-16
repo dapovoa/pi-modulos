@@ -23,7 +23,7 @@ Agent dir defaults to `~/.pi/agent/` or `$PI_CODING_AGENT_DIR` when set (portabl
 | [`pi-mistral`](pi-mistral/README.md) | Provider + Tools | Mistral AI provider + `mistral_ocr` and `mistral_fim` tools |
 | [`pi-nvidia`](pi-nvidia/README.md) | Provider | Nvidia NIM — Nemotron, Gemma, Kimi, DeepSeek, Qwen, etc. |
 | [`pi-qwencloud`](pi-qwencloud/README.md) | Provider | Alibaba DashScope — Qwen3.7, DeepSeek V4, GLM-5.1, MiniMax, etc. |
-| [`pi-tools`](pi-tools/README.md) | Tool | Eight skills with dedicated models: `/clean` (zero comments, wiki-first), `/formatter`, `/wiki`, `/bug`, `/duplication`, `/security`, `/performance`, `/dead` |
+| [`pi-tools`](pi-tools/README.md) | Tool | Eight skills with dedicated models: `/strip-comments`, `/format-code`, `/wiki-sync`, `/bug-hunt`, `/deduplicate-code`, `/security-audit`, `/performance-audit`, `/prune-dead` |
 | [`pi-xiaomi`](pi-xiaomi/README.md) | Provider | Xiaomi MiMo Token Plan — prompt cache key injection |
 
 ## Deploy workflow
@@ -38,8 +38,8 @@ Agent dir defaults to `~/.pi/agent/` or `$PI_CODING_AGENT_DIR` when set (portabl
 
 - **pi-commit** — single model in `pi-commit/config.json`. Use `/commit --public` when preparing commits for a public audience (message describes the outcome, not sanitization).
 - **pi-tools** — per-skill models in `pi-tools/config.json`:
-  - Mechanical (`clean`, `formatter`, `wiki`): `deepseek/deepseek-v4-flash`
-  - Technical (`bug`, `duplication`, `security`, `performance`, `dead`): `pi-cursor/grok-4.6`
+  - Mechanical (`strip-comments`, `format-code`, `wiki-sync`): `deepseek/deepseek-v4-flash`
+  - Technical (`bug-hunt`, `deduplicate-code`, `security-audit`, `performance-audit`, `prune-dead`): `pi-cursor/grok-4.6`
 - **Providers** — enable models in `.pi/agent/settings.json` (`enabledModels`); auth in `.pi/agent/auth.json`.
 
 See each module README for full `config.json` examples.
@@ -48,7 +48,8 @@ See each module README for full `config.json` examples.
 
 - `pi-commandcode` — deleted 2026-06-02 (models migrated to `pi-qwencloud` where applicable).
 - `pi-memory` — removed 2026-06-04 (redundant with pi built-in wiki injection).
-- `pi-tools` `/comments` — removed 2026-08-15; merged into `/clean` (single comment-removal skill).
+- `pi-tools` `/comments` — removed 2026-08-15; merged into `/strip-comments` (single comment-removal skill).
+- `pi-tools` short command names (`/clean`, `/bug`, etc.) — renamed 2026-08-16 to kebab two-word names; see `pi-tools/README.md`.
 
 ---
 

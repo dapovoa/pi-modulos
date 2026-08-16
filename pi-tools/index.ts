@@ -5,7 +5,16 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import type { Model } from "@earendil-works/pi-ai"
 
 let step = 0
-let activeCommand: "clean" | "wiki" | "bug" | "duplication" | "security" | "formatter" | "performance" | "dead" | null = null
+let activeCommand:
+  | "strip-comments"
+  | "format-code"
+  | "wiki-sync"
+  | "bug-hunt"
+  | "deduplicate-code"
+  | "security-audit"
+  | "performance-audit"
+  | "prune-dead"
+  | null = null
 let previousModel: Model<any> | null | undefined = null
 
 const AGENT_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
@@ -29,15 +38,25 @@ function loadSkillPrompt(skillName: string): string {
   return m ? m[1].trim() : raw.trim()
 }
 
-const COMMAND_NAMES: Record<string, "clean" | "wiki" | "bug" | "duplication" | "security" | "formatter" | "performance" | "dead"> = {
-  clean: "clean",
-  wiki: "wiki",
-  bug: "bug",
-  duplication: "duplication",
-  security: "security",
-  formatter: "formatter",
-  performance: "performance",
-  dead: "dead",
+const COMMAND_NAMES: Record<
+  string,
+  | "strip-comments"
+  | "format-code"
+  | "wiki-sync"
+  | "bug-hunt"
+  | "deduplicate-code"
+  | "security-audit"
+  | "performance-audit"
+  | "prune-dead"
+> = {
+  "strip-comments": "strip-comments",
+  "format-code": "format-code",
+  "wiki-sync": "wiki-sync",
+  "bug-hunt": "bug-hunt",
+  "deduplicate-code": "deduplicate-code",
+  "security-audit": "security-audit",
+  "performance-audit": "performance-audit",
+  "prune-dead": "prune-dead",
 }
 
 export default function (pi: ExtensionAPI) {

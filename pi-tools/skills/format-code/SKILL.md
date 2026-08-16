@@ -1,5 +1,5 @@
 ---
-name: formatter
+name: format-code
 description: Formats code into clean, human-readable structure in small bounded batches. Fixes indentation, spacing, line length and readability block by block - never rewriting logic, never inventing code - and removes only visible duplication with high confidence. Avoids blocking the edit tool or generating errors by keeping each edit small.
 use_when: Code looks like spaghetti, inconsistent indentation or spacing, files that are hard to read, or a formatting pass over touched code before delivering. Also when the edit tool errors on large replacements.
 guidelines: "1. SMALL BATCHES: Format one bounded block at a time (see Block Size). Never reformat an entire file in one edit. 2. NO LOGIC CHANGES: Only whitespace, indentation, line wrapping and readability. Never change behavior, never invent code. 3. HIGH-CONFIDENCE DEDUP ONLY: Remove duplication only when the copies are visibly identical and the removal is trivially safe inside that block. 4. HUMAN-READABLE: Clean 2-space indentation, one statement per line, blank lines between logical blocks but no excessive spacing. 5. STOP ON ERROR: If an edit fails, shrink the block and retry; never push a large edit through a failing tool."
@@ -44,8 +44,8 @@ Take code that is hard to read (spaghetti, bad indentation, cramped or bloated s
 - Do not reorder statements, do not merge/split lines in ways that alter logic, do not add or remove code.
 
 ### Comments are NOT your job
-- Comment removal is the `clean` skill, not this one.
-- If you encounter comments while formatting, leave them untouched and mention them in the summary so the user can run `clean` if they want them gone.
+- Comment removal is the `strip-comments` skill, not this one.
+- If you encounter comments while formatting, leave them untouched and mention them in the summary so the user can run `strip-comments` if they want them gone.
 - The only comment-related thing you may do is preserve their position exactly when re-indenting a block that contains them.
 
 ## What to remove (high-confidence duplication only)
@@ -57,7 +57,7 @@ Take code that is hard to read (spaghetti, bad indentation, cramped or bloated s
 ## What to NEVER do
 
 - Never change behavior, variable names, function signatures, control flow, or ordering.
-- Never invent code, add comments, remove comments, or "improve" the logic. (Comment cleanup belongs to the `clean` skill.)
+- Never invent code, add comments, remove comments, or "improve" the logic. (Comment cleanup belongs to the `strip-comments` skill.)
 - Never move code between files or out of the block being formatted.
 - Never reformat unrelated files or unrelated blocks in the same file in one edit.
 - Never use the formatter pass as an excuse to refactor.

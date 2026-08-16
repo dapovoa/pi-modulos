@@ -1,10 +1,10 @@
 {
-  "clean": "deepseek/deepseek-v4-flash",
-  "formatter": "deepseek/deepseek-v4-flash",
-  "wiki": "deepseek/deepseek-v4-flash",
-  "bug": "pi-cursor/grok-4.6",
-  "duplication": "pi-cursor/grok-4.6",
-  "security": "pi-cursor/grok-4.6",
-  "performance": "pi-cursor/grok-4.6",
-  "dead": "pi-cursor/grok-4.6"
+  "strip-comments": "deepseek/deepseek-v4-flash",
+  "format-code": "deepseek/deepseek-v4-flash",
+  "wiki-sync": "deepseek/deepseek-v4-flash",
+  "bug-hunt": "pi-cursor/grok-4.6",
+  "deduplicate-code": "pi-cursor/grok-4.6",
+  "security-audit": "pi-cursor/grok-4.6",
+  "performance-audit": "pi-cursor/grok-4.6",
+  "prune-dead": "pi-cursor/grok-4.6"
 }
