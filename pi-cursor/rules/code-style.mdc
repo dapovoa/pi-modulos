@@ -47,6 +47,12 @@ how the surrounding code looks. Never copy the surrounding style when it is bad.
 - Never edit `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles, or the REST of `.pi/` outside the wiki: never touch `.pi/cursor-agents.json`, `.pi/pi-block-state.json`, or `.pi/agent/` (provider state, global config with credentials). `.pi/memory/` (the wiki) is yours to edit - register findings there. The `.cursorignore` exclusions are intentional boundaries - do not bypass them with shell/rg.
 - Never edit vendor or third-party code, even inside `src/`: files with a license header, "extract from ... source", "Copyright ... Authors", bundled/minified third-party code. Inspect if needed, never modify.
 
+### API error responses
+- Clients see safe, generic, or curated text only. Internal detail stays in server logs.
+- Backend: never return raw `err.message`, stack traces, SQL/vendor errors, or paths in JSON. Log full detail; respond with fixed or status-based generic strings. `5xx` always generic. `4xx` only literal handler strings, not exception propagation.
+- Frontend: never show `err.message` or server `message`/`error` fields in UI. Use a central helper mapping HTTP status to fixed copy with an explicit fallback. Do not prefer server text over status fallbacks for `5xx`.
+- When touching error handling: fix the central helper first, then call sites.
+
 ### Frontend: ZERO comments (hard rule)
 - Any file that ships to the frontend (`.tsx`, `.jsx`, `.vue`, `.svelte`, `.astro`, `.ts`/`.js` imported by UI code, `.css`/`.scss` bundled for the browser, HTML) must contain NO comments at all.
 - This includes "simple" or "obvious" comments, section titles, TODO notes, and commented-out code. All of it is forbidden in frontend output.

@@ -360,6 +360,7 @@ const activeAgents = new Map<string, ActiveAgentEntry>()
 
 function closeAllActiveAgents(): void {
   for (const [sk, entry] of [...activeAgents]) {
+    persistAgentId(entry.cwd, sk, entry.agentId)
     try {
       entry.agent.close()
     } catch {}
@@ -531,6 +532,12 @@ function loadAgentState(cwd: string): AgentState {
 function saveAgentState(cwd: string, state: AgentState) {
   const fp = join(cwd, AGENTS_FILE)
   try { writeFileSync(fp, JSON.stringify(state), "utf-8") } catch {}
+}
+
+function persistAgentId(cwd: string, sk: string, agentId: string) {
+  const state = loadAgentState(cwd)
+  state.agents[sk] = agentId
+  saveAgentState(cwd, state)
 }
 
 const FALLBACK_CONTEXT_MAX_CHARS = 60_000
@@ -1068,6 +1075,7 @@ function hasThinkingOrToolOutput(state: DeltaStreamState): boolean {
 }
 
 const AUTH_RESULT_RE = /authenticat|unauthenticated|invalid.*key|session.*expired|logged?\s*(in|out)/i
+const ACTIVE_RUN_RE = /already has active run/i
 const AUTH_RETRY_BACKOFF_MS = [3_000, 9_000, 25_000]
 const MAX_AUTH_PARK_ATTEMPTS = 3
 const SDK_TOKEN_MAX_AGE_MS = 50 * 60 * 1000
@@ -1183,10 +1191,19 @@ async function probeFreshAgentAuth(
   }
 }
 
+function isActiveRunError(resultOrMsg: any): boolean {
+  const msg = typeof resultOrMsg === "string"
+    ? resultOrMsg
+    : resultOrMsg?.error?.message ?? resultOrMsg?.message ?? ""
+  return ACTIVE_RUN_RE.test(msg)
+}
+
 function isNonTruncationError(result: any): boolean {
   if (result?.status !== "error") return false
   const msg = result?.error?.message ?? ""
-  return AUTH_RESULT_RE.test(msg) || isResourceExhaustedError(result)
+  return AUTH_RESULT_RE.test(msg)
+    || isResourceExhaustedError(result)
+    || isActiveRunError(msg)
 }
 
 function applyRunResult(result: any, state: DeltaStreamState) {
@@ -1330,6 +1347,47 @@ async function executeSendCycle(args: {
   if (result?.status === "error") {
     piLog("warn", "Agent returned status=error, result:", JSON.stringify(result).slice(0, 500))
   }
+
+  if (isActiveRunError(result) && !force && !state.localAbort.signal.aborted) {
+    piLog("warn", "Agent already has active run, retrying once with force (keep memory)...")
+    try {
+      run = await Promise.race([
+        agent.send(
+          images.length ? { text, images } : text,
+          buildSendOptions(modelSel, state, true, false),
+        ),
+        abortRej,
+      ])
+      await consumeRunStream(run, state)
+      if (state.textIdx >= 0 && state.textAcc) {
+        state.st.push({
+          type: "text_end",
+          contentIndex: state.textIdx,
+          content: state.textAcc,
+          partial: state.g,
+        })
+      }
+      result = await Promise.race([
+        waitForRunResult(
+          run,
+          state.localAbort.signal,
+          apiKey || "",
+          modelSel,
+          cwd || "",
+          sessionId || "",
+          sk || "",
+        ),
+        abortRej,
+      ])
+    } catch (e: any) {
+      if (state.localAbort.signal.aborted) throw e
+      if (e instanceof sdkAuthenticationError || e?.code === 16) {
+        throw e
+      }
+      piLog("warn", "Force retry after active run failed:", e instanceof Error ? e.message : String(e))
+    }
+  }
+
   let continuations = 0
   while (
     result?.status !== "finished" &&
@@ -1582,18 +1640,8 @@ export default async function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async (ev: any, ctx) => {
     const sessionId = getSessionId(ctx, ev)
     const scopedSession = hasProvidedSessionId(ctx, ev)
-    const scopedCwd = getSessionCwd(sessionId)
-    const statesByCwd = new Map<string, AgentState>([[scopedCwd, { agents: {} }]])
     for (const [key, entry] of activeAgents) {
-      let state = statesByCwd.get(entry.cwd)
-      if (!state) {
-        state = { agents: {} }
-        statesByCwd.set(entry.cwd, state)
-      }
-      state.agents[key] = entry.agentId
-    }
-    for (const [cwd, state] of statesByCwd) {
-      saveAgentState(cwd, state)
+      persistAgentId(entry.cwd, key, entry.agentId)
     }
     for (const [key, entry] of activeAgents) {
       if (scopedSession && entry.sessionId !== sessionId) continue
@@ -1831,9 +1879,7 @@ async function recoverFromAuthError(args: {
       try {
         agent = await createFresh(apiKey)
         agentEntry = makeAgentEntry(agent, agent.agentId, cwd, sessionId)
-        const state = loadAgentState(cwd)
-        state.agents[sk] = agent.agentId
-        saveAgentState(cwd, state)
+        persistAgentId(cwd, sk, agent.agentId)
       } catch (createErr: any) {
         lastError = createErr?.message || String(createErr)
         piLog("warn", "sdkAgent.create also failed:", lastError)
@@ -2037,6 +2083,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         } else if (savedId) {
           const reason = stuckAgentIds.has(savedId) ? "previously stuck" : "session was compacted"
           piLog("warn", "Skipping resume of " + reason + " agent:", savedId.slice(0, 16))
+          priorSavedId = savedId
         }
       }
       if (agentEntry) {
@@ -2045,6 +2092,8 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         const idleExpired = idleMs > AGENT_MAX_IDLE_MS
         const tokenAged = tokenMs > SDK_TOKEN_MAX_AGE_MS
         if (idleExpired || tokenAged) {
+          const savedIdBeforeRestart = agentEntry.agentId
+          persistAgentId(cwd, sk, savedIdBeforeRestart)
           if (idleExpired) {
             piLog("info", "Agent idle-expired after " + Math.round(idleMs / 1000) + "s, resuming from disk...")
           } else {
@@ -2059,8 +2108,8 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           activeAgents.delete(sk)
           agentEntry = undefined
           const savedState = loadAgentState(cwd)
-          const savedId = savedState.agents[sk]
-          if (savedId && !stuckAgentIds.has(savedId)) {
+          const savedId = savedState.agents[sk] || savedIdBeforeRestart
+          if (savedId) {
             try {
               const resumeP = sdkAgent.resume(savedId, { apiKey, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
               const resumed = await Promise.race([
@@ -2097,9 +2146,13 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
                   }
                 }
               }
-              piLog("warn", "Idle-expired agent resume failed, will create fresh:", err?.message || err)
-              stuckAgentIds.add(savedId)
-              priorSavedId = savedId
+              if (!agentEntry) {
+                piLog("warn", "Idle-expired agent resume failed, will create fresh:", err?.message || err)
+                if (isAuthError) {
+                  stuckAgentIds.add(savedId)
+                }
+                priorSavedId = savedId
+              }
             }
           }
         }
@@ -2118,7 +2171,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           agentEntry = makeAgentEntry(agent, agent.agentId, cwd, sessionId)
           activeAgents.set(sk, agentEntry)
           agentIsFresh = true
-          { const st = loadAgentState(cwd); st.agents[sk] = agent.agentId; saveAgentState(cwd, st) }
+          persistAgentId(cwd, sk, agent.agentId)
           createSucceeded = true
         } catch (err: any) {
           const isAuthError = err instanceof AuthenticationError || err?.code === 16 || /unauthenticated/i.test(err?.message ?? "")
@@ -2138,7 +2191,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
                 agentEntry = makeAgentEntry(freshAgent, freshAgent.agentId, cwd, sessionId)
                 activeAgents.set(sk, agentEntry)
                 agentIsFresh = true
-                { const st = loadAgentState(cwd); st.agents[sk] = freshAgent.agentId; saveAgentState(cwd, st) }
+                persistAgentId(cwd, sk, freshAgent.agentId)
                 createSucceeded = true
                 piLog("info", "sdkAgent.create succeeded after auth retry")
               } catch (freshErr: any) {
@@ -2178,10 +2231,20 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           const freshAgent = await sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
           agentEntry = makeAgentEntry(freshAgent, freshAgent.agentId, cwd, sessionId)
           activeAgents.set(sk, agentEntry)
-          const state = loadAgentState(cwd)
-          state.agents[sk] = freshAgent.agentId
-          saveAgentState(cwd, state)
+          persistAgentId(cwd, sk, freshAgent.agentId)
           agentIsFresh = true
+        }
+      }
+
+      if (agentChanged && !agentIsFresh && agentEntry && fallbackContext) {
+        try {
+          const msgs = await sdkAgent.messages.list(agentEntry.agentId, { runtime: "local", cwd })
+          if (!msgs?.length) {
+            piLog("warn", "Resumed agent has empty local conversation; seeding pi context")
+            agentIsFresh = true
+          }
+        } catch (e: any) {
+          piLog("warn", "Could not inspect resumed conversation:", e?.message || String(e))
         }
       }
 
@@ -2200,8 +2263,17 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           seedText = fallbackContext
           piLog("info", `Fresh agent seeded with ${fallbackContext.length} chars of pi context`)
         }
+        if (!seedText) {
+          piLog("warn", "Fresh agent has no seed (empty pi context and no prior Cursor conversation)")
+        }
       }
       sendText = seedText ? seedText + text : text
+      piLog(
+        "info",
+        `send session=${sessionId.slice(0, 8)} model=${m.id} `
+          + `agent=${(agentEntry?.agentId ?? "none").slice(0, 16)} `
+          + `fresh=${agentIsFresh} seedChars=${seedText.length}`,
+      )
 
       const result = await executeSendCycle({
         agent: agentEntry!.agent,
@@ -2283,7 +2355,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           const freshAgent = await sdkAgent.create({ apiKey, model: modelSel, local: { cwd, settingSources: ["project"], enableAgentRetries: SDK_ENABLE_AGENT_RETRIES } })
           agentEntry = makeAgentEntry(freshAgent, freshAgent.agentId, cwd, sessionId)
           activeAgents.set(sk, agentEntry)
-          const st2 = loadAgentState(cwd); st2.agents[sk] = freshAgent.agentId; saveAgentState(cwd, st2)
+          persistAgentId(cwd, sk, freshAgent.agentId)
           let freshSeed = ""
           if (priorSavedId) {
             const realSeed = await buildCursorConversationSeed(sdkAgent, priorSavedId, cwd)
@@ -2303,8 +2375,12 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
       }
 
       if ((result?.status === "error" || emptyFinished) && agentEntry && !hasThinkingOrToolOutput(deltaState)) {
-        piLog("warn", "Agent error: evicting agent", agentEntry.agentId.slice(0, 16), "so next message creates fresh agent")
-        evictAgent(sk, cwd, agentEntry)
+        if (isActiveRunError(result)) {
+          piLog("warn", "Keeping agent after active-run error (memory preserved):", agentEntry.agentId.slice(0, 16))
+        } else {
+          piLog("warn", "Agent error: evicting agent", agentEntry.agentId.slice(0, 16), "so next message creates fresh agent")
+          evictAgent(sk, cwd, agentEntry)
+        }
       }
 
       if (localAbort.signal.aborted) throw new Error("aborted")

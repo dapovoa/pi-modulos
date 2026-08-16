@@ -1,6 +1,6 @@
 ---
 name: security
-description: Security review automation focused on vulnerabilities, hardening, and data protection. Audits auth/authz, injection, secrets management, configuration (CORS, headers, TLS), and supply chain - with findings tracked in the persistent wiki.
+description: Security review automation focused on vulnerabilities, hardening, and data protection. Audits auth/authz, injection, secrets management, configuration (CORS, headers, TLS), API error information disclosure, and supply chain - with findings tracked in the persistent wiki.
 use_when: Security audit, pre-release hardening, reviewing auth/authz flows, checking for exposed secrets or misconfigurations, validating rate limiting, or investigating suspicious behavior in production.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. CONCRETE EXPLOIT: Must describe a plausible attack scenario that reaches the vulnerability - no theoretical concerns. 3. MINIMAL FIX: Implement smallest possible fix that closes the hole. No refactors. 4. HIGH CONFIDENCE: If uncertain, report to the user instead of fixing. 5. CLEANUP: Remove wiki entries for vulnerabilities no longer present in code. Keep .pi/memory/ small - only active vulnerabilities."
 user-invocable: true
@@ -21,7 +21,7 @@ Read `.pi/memory/index.md` first: it tracks vulnerabilities from past runs so yo
 
 ## Goal
 
-Audit the codebase for security vulnerabilities and hardening gaps. Only surface issues that an attacker could plausibly exploit: data exposure, privilege escalation, injection, or credential leaks.
+Audit the codebase for security vulnerabilities and hardening gaps. Only surface issues that an attacker could plausibly exploit: data exposure (including API error messages), privilege escalation, injection, or credential leaks.
 
 ## File scope (never touch)
 
@@ -31,9 +31,35 @@ Audit the codebase for security vulnerabilities and hardening gaps. Only surface
 ## Investigation strategy
 
 - Focus on attack surface: endpoints and entry points, authentication/authorization boundaries, and anything that processes untrusted input.
-- Look for: IDOR and privilege escalation, missing auth guards on protected routes, SQL/NoSQL injection (unparameterized queries), XSS, command injection, hardcoded secrets, secrets in logs, permissive CORS, missing security headers, weak rate limiting, and known CVEs in dependencies.
+- Look for: IDOR and privilege escalation, missing auth guards on protected routes, SQL/NoSQL injection (unparameterized queries), XSS, command injection, hardcoded secrets, secrets in logs, permissive CORS, missing security headers, weak rate limiting, known CVEs in dependencies, and **information disclosure via API/UI error messages**.
 - Trace the full request path - don't pattern-match on a single line. Understand who can reach the vulnerable code and what data flows through it.
 - Ignore: theoretical concerns without a reachable attack path, low-severity hardening nits that merely reduce defense-in-depth, and style issues.
+
+### API error information disclosure
+
+Attackers and unauthenticated users can read anything returned in HTTP JSON bodies or shown in UI toasts/alerts. Treat error responses as part of the attack surface.
+
+**Backend — grep and review:**
+- `jsonError(.*err` / `catch` blocks that pass `err.message` or `String(err)` to clients
+- `jsonError(result.error` / `jsonError(.*\.error` where the value may come from DB, vendor APIs, or exceptions
+- Global `onError` / exception middleware: must return generic text for unhandled `5xx`; full detail only in server logs
+- `console.error` in responses (must never echo log output to the client)
+
+**Frontend — grep and review:**
+- Direct propagation: `err.message`, `error.message`, `toast.error(.*err`, `setError(.*err`, `ApiError ? err.message`
+- Helpers that prefer server `message` over status fallbacks (especially for `5xx`)
+- Missing central helper: per-component ad-hoc error display
+
+**Policy (fix toward this):**
+- `5xx`: client always sees a fixed generic message; server logs retain stack/vendor/SQL detail
+- `4xx`: only curated literal strings from route handlers — never raw exception or downstream library text
+- Frontend: status-based fixed copy via central helper; explicit per-call fallback; domain helpers (e.g. upload) when status mapping is not enough
+- Auth UX allowlists are OK only when strings are intentional, documented, and not derived from exceptions
+
+**Fix priority when found:**
+1. Central error helper (stop trusting server text for `5xx`)
+2. Backend routes passing internal errors to `jsonError`
+3. Frontend call sites using `err.message` directly
 
 ## Confidence bar
 

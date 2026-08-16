@@ -38,3 +38,9 @@ Enable models in `settings.json` (`enabledModels`), e.g. `pi-cursor/composer-2.5
 ## Deploy (this monorepo)
 
 Source of truth: `pi-modulos/pi-cursor/`. Copy changed files to runtime `extensions/pi-cursor/`, `npm install` if deps changed, `/reload`. Include `rules/*.mdc` when style/behavior rules change — they sync to each project on next pi session start.
+
+`APPEND_SYSTEM.md` in this folder is the source for `.pi/agent/APPEND_SYSTEM.md` (pi system prompt for all providers). Copy on change:
+
+```bash
+cp pi-modulos/pi-cursor/APPEND_SYSTEM.md "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/APPEND_SYSTEM.md"
+```
