@@ -1993,7 +1993,6 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         : Array.isArray(lastUser?.content)
           ? lastUser.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n")
           : ""
-      if (text) text = LOCAL_TOOLS_GUIDANCE + buildProjectMemoryBlock(cwd) + text
 
       const VALID_MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
       images = []
@@ -2267,12 +2266,19 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
           piLog("warn", "Fresh agent has no seed (empty pi context and no prior Cursor conversation)")
         }
       }
-      sendText = seedText ? seedText + text : text
+
+      let userText = text
+      if (agentIsFresh && userText) {
+        userText = LOCAL_TOOLS_GUIDANCE + buildProjectMemoryBlock(cwd) + userText
+      }
+
+      sendText = seedText ? seedText + userText : userText
       piLog(
         "info",
         `send session=${sessionId.slice(0, 8)} model=${m.id} `
           + `agent=${(agentEntry?.agentId ?? "none").slice(0, 16)} `
-          + `fresh=${agentIsFresh} seedChars=${seedText.length}`,
+          + `fresh=${agentIsFresh} seedChars=${seedText.length} `
+          + `guidance=${agentIsFresh && !!text}`,
       )
 
       const result = await executeSendCycle({
