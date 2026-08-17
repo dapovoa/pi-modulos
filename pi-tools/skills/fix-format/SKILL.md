@@ -1,6 +1,6 @@
 ---
 name: fix-format
-description: Formats code into clean, human-readable structure in small bounded batches. Fixes indentation, spacing, line length and readability block by block - never rewriting logic, never inventing code - and removes only visible duplication with high confidence. Avoids blocking the edit tool or generating errors by keeping each edit small.
+description: Formata código em blocos pequenos (indentação, linhas, espaçamento); nunca altera lógica nem remove comentários.
 use_when: Code looks like spaghetti, inconsistent indentation or spacing, files that are hard to read, or a formatting pass over touched code before delivering. Also when the edit tool errors on large replacements.
 guidelines: "1. SMALL BATCHES: Format one bounded block at a time (see Block Size). Never reformat an entire file in one edit. 2. NO LOGIC CHANGES: Only whitespace, indentation, line wrapping and readability. Never change behavior, never invent code. 3. HIGH-CONFIDENCE DEDUP ONLY: Remove duplication only when the copies are visibly identical and the removal is trivially safe inside that block. 4. HUMAN-READABLE: Clean 2-space indentation, one statement per line, blank lines between logical blocks but no excessive spacing. 5. STOP ON ERROR: If an edit fails, shrink the block and retry; never push a large edit through a failing tool."
 user-invocable: true

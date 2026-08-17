@@ -53,6 +53,18 @@ const COMMAND_NAMES: Record<string, SkillName> = {
   "pi-audit-deps": "audit-deps",
 }
 
+const COMMAND_DESCRIPTIONS: Record<string, string> = {
+  "pi-fix-clean": "Apaga comentários; guarda o essencial no wiki",
+  "pi-fix-format": "Formata código em blocos; não muda lógica",
+  "pi-maintain-wiki": "Alinha wiki com código; preserva histórico",
+  "pi-audit-bug": "Bugs graves; corrige só com alta confiança",
+  "pi-fix-dedupe": "Unifica código repetido",
+  "pi-audit-security": "Auth, secrets, injection, erros na API",
+  "pi-audit-perf": "SQL, latência, memória, bundle",
+  "pi-fix-dead": "Remove código morto com prova",
+  "pi-audit-deps": "CVEs npm; sugere bumps seguros",
+}
+
 export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", () => {
     if (step !== 1) return
@@ -88,7 +100,7 @@ export default function (pi: ExtensionAPI) {
 
   for (const [name, skillName] of Object.entries(COMMAND_NAMES)) {
     pi.registerCommand(name, {
-      description: `Run the ${skillName} skill with a dedicated model`,
+      description: COMMAND_DESCRIPTIONS[name] ?? skillName,
       handler: async (args, ctx) => {
         try {
           if (!ctx.isIdle()) {

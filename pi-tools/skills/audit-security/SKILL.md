@@ -1,6 +1,6 @@
 ---
 name: audit-security
-description: Security review automation focused on vulnerabilities, hardening, and data protection. Audits auth/authz, injection, secrets management, configuration (CORS, headers, TLS), and API error information disclosure — with findings tracked in the persistent wiki. For dependency CVEs use audit-deps.
+description: Audita vulnerabilidades no código (auth, injection, secrets, CORS, erros expostos na API). CVEs de deps → audit-deps.
 use_when: Security audit, pre-release hardening, reviewing auth/authz flows, checking for exposed secrets or misconfigurations, validating rate limiting, or investigating suspicious behavior in production.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. CONCRETE EXPLOIT: Must describe a plausible attack scenario that reaches the vulnerability - no theoretical concerns. 3. MINIMAL FIX: Implement smallest possible fix that closes the hole. No refactors. 4. HIGH CONFIDENCE: If uncertain, report to the user instead of fixing. 5. CLEANUP: Remove wiki entries for vulnerabilities no longer present in code. Keep .pi/memory/ small - only active vulnerabilities."
 user-invocable: true

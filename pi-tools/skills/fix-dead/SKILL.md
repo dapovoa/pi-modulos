@@ -1,6 +1,6 @@
 ---
 name: fix-dead
-description: Dead code detection covering unused imports, orphan exports, unreferenced functions/variables, unreachable code, dead branches, and orphan files. Reports findings first with proof of non-reachability; removes only code that is provably unreferenced (high confidence). Findings tracked in the persistent wiki.
+description: Encontra e remove código morto (imports, exports, ficheiros órfãos) só com prova de não uso.
 use_when: Suspicious that the codebase has unused imports, orphaned exports, unreferenced functions, unreachable code, dead branches, or files nobody imports. Also before a cleanup pass or when pruning a codebase.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. PROOF REQUIRED: 'Not referenced' must be proven with grep/glob across ALL files - a missing reference is not evidence until you have searched. 3. HIGH CONFIDENCE = REMOVE: when zero references are proven across the project AND no dynamic/config/entry/public-API reference exists, remove it - do not wait for confirmation. 4. REPORT ONLY WHEN UNCERTAIN: if reachability is doubtful (dynamic calls, string paths, public API, config references), report with evidence instead of removing. 5. CLEANUP: Remove wiki entries for dead code no longer present. Keep .pi/memory/ small - only active findings."
 user-invocable: true

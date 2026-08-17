@@ -1,6 +1,6 @@
 ---
 name: audit-deps
-description: Supply-chain audit for npm/pnpm/yarn projects. Runs audit and outdated checks, maps CVEs to installed versions, and ends with clear suggestions (what to do, what not to do and why). Report-first — does not edit manifests unless the user explicitly asks to apply a suggestion.
+description: Audita dependências npm (CVEs, outdated); termina com sugestões do que fazer, adiar e ignorar.
 use_when: Pre-release dependency review, investigating CVE advisories, checking for outdated packages, or periodic supply-chain hygiene. Not for application code security — use audit-security for that.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first; lockfile/package.json wins over wiki. 2. HIGH CONFIDENCE: Same bar as audit-bug — if uncertain, report to the user instead of editing. 3. REPORT FIRST: Default is report only; no package.json/lockfile edits unless user explicitly requests a bump. 4. CONCRETE CVE: Each finding tied to fresh audit CLI output at installed version. 5. CLEANUP: Remove wiki entries when re-audit is clean."
 user-invocable: true
