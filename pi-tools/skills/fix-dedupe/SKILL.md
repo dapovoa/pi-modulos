@@ -1,5 +1,5 @@
 ---
-name: deduplicate-code
+name: fix-dedupe
 description: Automation that hunts code duplication - both syntactic (similar blocks) and semantic (different names, identical logic). Consolidates repeated code into a single source of truth, tracked in the persistent wiki.
 use_when: Reducing maintenance burden, DRY cleanup, reviewing code for repeated logic across modules or layers (frontend/backend), or investigating why a change requires edits in multiple places.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. CONCRETE EVIDENCE: Must show actual duplicate code with identical behavior - no stylistic similarities or theoretical DRY concerns. 3. MINIMAL CONSOLIDATION: Smallest extraction that removes the duplication and keeps behavior identical. No broad refactors. 4. HIGH CONFIDENCE: If uncertain whether the pieces are truly equivalent, report to the user instead of consolidating. 5. CLEANUP: Remove wiki entries for duplications no longer present in code. Keep .pi/memory/ small - only active duplications."

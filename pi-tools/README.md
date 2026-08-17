@@ -3,27 +3,25 @@
 Runs our own skills with a **dedicated model per command** instead of the chat model —
 same pattern as `/commit` (pi-commit). Each skill has its own model in `config.json`.
 
+Commands use the **`pi-{category}-{action}`** prefix so they group in autocomplete (`/pi`).
+
 Note: `summerize` is NOT here — it serves the pi chat model via `/skill:summerize`
 (see APPEND_SYSTEM), so it stays in `.pi/agent/skills/` and is not a pi-tools command.
 
 ## How it works
 
-- `/strip-comments`, `/format-code`, `/wiki-sync`, `/bug-hunt`, `/deduplicate-code`,
-  `/security-audit`, `/performance-audit`, `/prune-dead` are extension commands
+- `/pi-fix-clean`, `/pi-fix-format`, `/pi-maintain-wiki`, `/pi-audit-bug`, `/pi-fix-dedupe`,
+  `/pi-audit-security`, `/pi-audit-perf`, `/pi-fix-dead`, `/pi-audit-deps` are extension commands
   (`pi.registerCommand`).
-- Each command reads the skill's `SKILL.md` from this extension's own
-  `skills/<name>/SKILL.md` as the prompt (single source of truth — the skills
-  live inside this extension, not in the global skills dir).
+- Each command reads the skill's `SKILL.md` from `skills/<skill-id>/SKILL.md` as the prompt.
 - It switches to the model configured for that skill (`pi.setModel`), sends the
   skill prompt as a hidden custom message (`display: false`), and restores the
   previous model on `agent_end`.
-- Portability: the agent dir is derived from `import.meta.url` (this extension
-  lives at `<agentDir>/extensions/pi-tools/`), never a hardcoded path.
 
 ## Deploy workflow
 
 1. Edit here in `pi-modulos/pi-tools/` (source of truth).
-2. Copy changed files to `$PI_CODING_AGENT_DIR/extensions/pi-tools/` (or `~/.pi/agent/extensions/pi-tools/`).
+2. Copy changed files to `$PI_CODING_AGENT_DIR/extensions/pi-tools/`.
 3. Run `/reload` in pi.
 
 Never edit the runtime extensions copy without syncing back to `pi-modulos/`.
@@ -34,49 +32,45 @@ Never edit the runtime extensions copy without syncing back to `pi-modulos/`.
 
 ```json
 {
-  "strip-comments": "deepseek/deepseek-v4-flash",
-  "format-code": "deepseek/deepseek-v4-flash",
-  "wiki-sync": "deepseek/deepseek-v4-flash",
-  "bug-hunt": "pi-cursor/grok-4.6",
-  "deduplicate-code": "pi-cursor/grok-4.6",
-  "security-audit": "pi-cursor/grok-4.6",
-  "performance-audit": "pi-cursor/grok-4.6",
-  "prune-dead": "pi-cursor/grok-4.6"
+  "fix-clean": "deepseek/deepseek-v4-flash",
+  "fix-format": "deepseek/deepseek-v4-flash",
+  "maintain-wiki": "deepseek/deepseek-v4-flash",
+  "audit-bug": "pi-cursor/grok-4.6",
+  "fix-dedupe": "pi-cursor/grok-4.6",
+  "audit-security": "pi-cursor/grok-4.6",
+  "audit-perf": "pi-cursor/grok-4.6",
+  "fix-dead": "pi-cursor/grok-4.6",
+  "audit-deps": "pi-cursor/grok-4.6"
 }
 ```
 
-| Tier | Skills | Model | Notes |
-|------|--------|-------|-------|
-| Mechanical | strip-comments, format-code, wiki-sync | `deepseek/deepseek-v4-flash` | Fast/cheap |
-| Technical | bug-hunt, deduplicate-code, security-audit, performance-audit, prune-dead | `pi-cursor/grok-4.6` | Strong reasoning; Cursor agent tools |
-
-If a configured model is unavailable, pi-tools falls back to the current chat model
-with a warning.
+| Category | Commands | Model |
+|----------|----------|-------|
+| **fix** (mechanical) | `pi-fix-clean`, `pi-fix-format` | `deepseek/deepseek-v4-flash` |
+| **fix** (technical) | `pi-fix-dedupe`, `pi-fix-dead` | `pi-cursor/grok-4.6` |
+| **audit** | `pi-audit-bug`, `pi-audit-security`, `pi-audit-perf`, `pi-audit-deps` | `pi-cursor/grok-4.6` |
+| **maintain** | `pi-maintain-wiki` | `deepseek/deepseek-v4-flash` |
 
 ## Commands
 
 | Command | What it does |
 |---------|----------------|
-| `/strip-comments [path...]` | Remove ALL comments in own code; knowledge goes to wiki first |
-| `/format-code [path...]` | Formatting and readability in small batches (no logic changes) |
-| `/wiki-sync` | Audit local wiki vs code; preserve process/history |
-| `/bug-hunt` | High-severity correctness bugs in recent commits |
-| `/deduplicate-code` | Consolidate repeated code |
-| `/security-audit` | Vulnerabilities, hardening, secrets, API error disclosure |
-| `/performance-audit` | SQL, concurrency, memory, I/O, frontend, API latency |
-| `/prune-dead` | Dead code (unused imports, orphan exports/files; proof before removal) |
+| `/pi-fix-clean [path...]` | Remove ALL comments; knowledge → wiki first |
+| `/pi-fix-format [path...]` | Formatting in small batches (no logic changes) |
+| `/pi-maintain-wiki` | Audit wiki vs code |
+| `/pi-audit-bug` | High-severity correctness bugs |
+| `/pi-fix-dedupe` | Consolidate repeated code |
+| `/pi-audit-security` | Vulnerabilities, secrets, API error disclosure |
+| `/pi-audit-perf` | SQL, latency, memory, bundle |
+| `/pi-fix-dead` | Dead code (proof before removal) |
+| `/pi-audit-deps` | Supply chain: npm audit, CVE report (advisory) |
 
 All edits are delivered as working-tree changes — never committed automatically.
 
-## Renamed (2026-08-16)
+## Command history
 
-| Old | New |
-|-----|-----|
-| `/clean` | `/strip-comments` |
-| `/formatter` | `/format-code` |
-| `/wiki` | `/wiki-sync` |
-| `/bug` | `/bug-hunt` |
-| `/duplication` | `/deduplicate-code` |
-| `/security` | `/security-audit` |
-| `/performance` | `/performance-audit` |
-| `/dead` | `/prune-dead` |
+| Era | Pattern | Example |
+|-----|---------|---------|
+| 2026-08-15 | single word | `/clean`, `/bug` |
+| 2026-08-16 | kebab two-word | `/strip-comments`, `/bug-hunt` |
+| 2026-08-17 | `pi-{category}-{action}` | `/pi-fix-clean`, `/pi-audit-deps` |

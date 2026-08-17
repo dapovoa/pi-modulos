@@ -1,6 +1,6 @@
 ---
-name: security-audit
-description: Security review automation focused on vulnerabilities, hardening, and data protection. Audits auth/authz, injection, secrets management, configuration (CORS, headers, TLS), API error information disclosure, and supply chain - with findings tracked in the persistent wiki.
+name: audit-security
+description: Security review automation focused on vulnerabilities, hardening, and data protection. Audits auth/authz, injection, secrets management, configuration (CORS, headers, TLS), and API error information disclosure — with findings tracked in the persistent wiki. For dependency CVEs use audit-deps.
 use_when: Security audit, pre-release hardening, reviewing auth/authz flows, checking for exposed secrets or misconfigurations, validating rate limiting, or investigating suspicious behavior in production.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. CONCRETE EXPLOIT: Must describe a plausible attack scenario that reaches the vulnerability - no theoretical concerns. 3. MINIMAL FIX: Implement smallest possible fix that closes the hole. No refactors. 4. HIGH CONFIDENCE: If uncertain, report to the user instead of fixing. 5. CLEANUP: Remove wiki entries for vulnerabilities no longer present in code. Keep .pi/memory/ small - only active vulnerabilities."
 user-invocable: true
@@ -31,7 +31,8 @@ Audit the codebase for security vulnerabilities and hardening gaps. Only surface
 ## Investigation strategy
 
 - Focus on attack surface: endpoints and entry points, authentication/authorization boundaries, and anything that processes untrusted input.
-- Look for: IDOR and privilege escalation, missing auth guards on protected routes, SQL/NoSQL injection (unparameterized queries), XSS, command injection, hardcoded secrets, secrets in logs, permissive CORS, missing security headers, weak rate limiting, known CVEs in dependencies, and **information disclosure via API/UI error messages**.
+- Look for: IDOR and privilege escalation, missing auth guards on protected routes, SQL/NoSQL injection (unparameterized queries), XSS, command injection, hardcoded secrets, secrets in logs, permissive CORS, missing security headers, weak rate limiting, and **information disclosure via API/UI error messages**.
+- Dependency CVEs and outdated packages are **`audit-deps`** — not this skill.
 - Trace the full request path - don't pattern-match on a single line. Understand who can reach the vulnerable code and what data flows through it.
 - Ignore: theoretical concerns without a reachable attack path, low-severity hardening nits that merely reduce defense-in-depth, and style issues.
 

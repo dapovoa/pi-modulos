@@ -1,5 +1,5 @@
 ---
-name: prune-dead
+name: fix-dead
 description: Dead code detection covering unused imports, orphan exports, unreferenced functions/variables, unreachable code, dead branches, and orphan files. Reports findings first with proof of non-reachability; removes only code that is provably unreferenced (high confidence). Findings tracked in the persistent wiki.
 use_when: Suspicious that the codebase has unused imports, orphaned exports, unreferenced functions, unreachable code, dead branches, or files nobody imports. Also before a cleanup pass or when pruning a codebase.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. PROOF REQUIRED: 'Not referenced' must be proven with grep/glob across ALL files - a missing reference is not evidence until you have searched. 3. HIGH CONFIDENCE = REMOVE: when zero references are proven across the project AND no dynamic/config/entry/public-API reference exists, remove it - do not wait for confirmation. 4. REPORT ONLY WHEN UNCERTAIN: if reachability is doubtful (dynamic calls, string paths, public API, config references), report with evidence instead of removing. 5. CLEANUP: Remove wiki entries for dead code no longer present. Keep .pi/memory/ small - only active findings."
@@ -41,11 +41,11 @@ Identify code that is not referenced anywhere: unused imports, orphaned exports,
 - **Only when grep across everything shows zero references AND no dynamic/config/entry reference exists can you classify as dead.**
 - **When in doubt: report, do not remove.**
 
-## Confidence-driven flow (resolve like bug-hunt/format-code)
+## Confidence-driven flow (resolve like audit-bug/fix-format)
 
 1. **Find candidates** (grep for unused imports, scan for orphan exports, trace reachability).
 2. **Prove** with grep across the whole project + check dynamic references (`import()`, `require()`, string paths, config arrays, build entries, plugin registrations, CLI commands, route registrations) + public API surface.
-3. **High confidence (zero references, no dynamic/config/entry/public reference) -> REMOVE now.** Do not wait for user confirmation - this is the expected behavior, same as `bug-hunt` and `format-code` fix proven issues.
+3. **High confidence (zero references, no dynamic/config/entry/public reference) -> REMOVE now.** Do not wait for user confirmation - this is the expected behavior, same as `audit-bug` and `fix-format` fix proven issues.
 4. **Uncertain reachability -> REPORT with evidence** (the code, where you searched, what you could not rule out) and let the user decide. Do not remove on doubt.
 5. After removal, verify: typecheck/build/tests still pass.
 

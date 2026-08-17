@@ -1,5 +1,5 @@
 ---
-name: bug-hunt
+name: audit-bug
 description: Deep bug-finding automation focused on high-severity correctness issues. Inspects recent commits for critical bugs that escaped review - data loss, crashes, security holes, race conditions.
 use_when: Post-deployment verification, pre-release audit, or investigating suspicious behavior in production.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. CONCRETE TRIGGER: Must describe a plausible scenario that triggers the bug - no theoretical concerns. 3. MINIMAL FIX: Implement smallest possible fix that resolves the issue. No refactors. 4. HIGH CONFIDENCE: If uncertain, report to the user instead of fixing. 5. CLEANUP: Remove wiki entries for bugs no longer present in code. Keep .pi/memory/ small - only active bugs."

@@ -1,8 +1,8 @@
 ---
-name: strip-comments
+name: fix-clean
 description: Removes ALL comments from the project's own source code — frontend and backend — for comment-free repos. Deletes narrative comments, docblocks, why-comments, workarounds, TODOs, and section banners. Preserves license headers, TypeScript reference directives, build placeholders, and vendor code. Non-obvious knowledge is moved to the project wiki before deletion.
 use_when: The user wants zero comments in own source code (frontend forbidden; backend also comment-free). Use for incremental tidy or full-repo purge.
-guidelines: "1. REMOVE ALL: Delete every comment in own code — frontend AND backend. 2. WIKI FIRST: Before deleting a non-obvious why-comment, record it in .pi/memory/log.md. 3. PRESERVE: license headers, /// reference directives, build-time placeholders, vendor/third-party code. 4. COMMENTS ONLY: Never format, re-indent, or change logic — use format-code for that. 5. NO GHOST LINES: Remove empty lines left by deleted comments. 6. SMALL BATCHES: ~30-40 lines per edit; shrink and retry on failure."
+guidelines: "1. REMOVE ALL: Delete every comment in own code — frontend AND backend. 2. WIKI FIRST: Before deleting a non-obvious why-comment, record it in .pi/memory/log.md. 3. PRESERVE: license headers, /// reference directives, build-time placeholders, vendor/third-party code. 4. COMMENTS ONLY: Never format, re-indent, or change logic — use fix-format for that. 5. NO GHOST LINES: Remove empty lines left by deleted comments. 6. SMALL BATCHES: ~30-40 lines per edit; shrink and retry on failure."
 user-invocable: true
 tools: [Read, Edit, Write, Grep]
 last-refreshed: 2026-08-15
@@ -12,7 +12,7 @@ You are a comment-removal automation. You delete ALL comments from the project's
 
 ## Scope
 
-- Delete comments only. Never touch code, formatting, indentation, or logic. Formatting is the `format-code` skill.
+- Delete comments only. Never touch code, formatting, indentation, or logic. Formatting is the `fix-format` skill.
 - Own source: `.ts`, `.tsx`, `.js`, `.jsx`, `.vue`, `.svelte`, `.astro`, `.css`, `.scss`, `.py`, `.go`, `.sql`, etc.
 - **Frontend hard rule:** any file that ships to the browser (`.tsx`, `.jsx`, `.vue`, `.svelte`, `.astro`, UI `.ts`/`.js`, bundled `.css`/`.scss`, HTML) — zero comments, no exceptions.
 

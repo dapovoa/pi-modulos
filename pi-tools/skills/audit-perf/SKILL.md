@@ -1,5 +1,5 @@
 ---
-name: performance-audit
+name: audit-perf
 description: Performance audit automation covering general performance issues - database queries (N+1, missing indexes, full scans, slow joins), concurrency (race conditions, lock contention, deadlocks, thundering herd), memory (leaks, unbounded growth, large allocations), I/O (blocking calls, redundant round-trips, missing caching), frontend (bundle size, blocking assets, LCP), and API latency. Findings tracked in the persistent wiki.
 use_when: Slow endpoints, database bottlenecks, high latency, memory growth, concurrency issues, bundle bloat, or pre-release performance review. Also when investigating why something is slow in production.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. CONCRETE TRIGGER: Must describe a plausible scenario where the issue manifests with measurable impact - no theoretical micro-optimizations. 3. MINIMAL FIX: Implement smallest possible fix that resolves the bottleneck. No refactors. 4. HIGH CONFIDENCE: If uncertain whether it is a real bottleneck, report to the user instead of fixing. 5. CLEANUP: Remove wiki entries for issues no longer present. Keep .pi/memory/ small - only active performance issues."

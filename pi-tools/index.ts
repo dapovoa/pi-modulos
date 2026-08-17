@@ -1,20 +1,23 @@
 import { readFileSync, existsSync } from "node:fs"
-import { resolve, join, dirname } from "node:path"
+import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import type { Model } from "@earendil-works/pi-ai"
 
+type SkillName =
+  | "fix-clean"
+  | "fix-format"
+  | "maintain-wiki"
+  | "audit-bug"
+  | "fix-dedupe"
+  | "audit-security"
+  | "audit-perf"
+  | "fix-dead"
+  | "audit-deps"
+
 let step = 0
-let activeCommand:
-  | "strip-comments"
-  | "format-code"
-  | "wiki-sync"
-  | "bug-hunt"
-  | "deduplicate-code"
-  | "security-audit"
-  | "performance-audit"
-  | "prune-dead"
-  | null = null
+let activeSkill: SkillName | null = null
+let activeCommand: string | null = null
 let previousModel: Model<any> | null | undefined = null
 
 const AGENT_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
@@ -38,25 +41,16 @@ function loadSkillPrompt(skillName: string): string {
   return m ? m[1].trim() : raw.trim()
 }
 
-const COMMAND_NAMES: Record<
-  string,
-  | "strip-comments"
-  | "format-code"
-  | "wiki-sync"
-  | "bug-hunt"
-  | "deduplicate-code"
-  | "security-audit"
-  | "performance-audit"
-  | "prune-dead"
-> = {
-  "strip-comments": "strip-comments",
-  "format-code": "format-code",
-  "wiki-sync": "wiki-sync",
-  "bug-hunt": "bug-hunt",
-  "deduplicate-code": "deduplicate-code",
-  "security-audit": "security-audit",
-  "performance-audit": "performance-audit",
-  "prune-dead": "prune-dead",
+const COMMAND_NAMES: Record<string, SkillName> = {
+  "pi-fix-clean": "fix-clean",
+  "pi-fix-format": "fix-format",
+  "pi-maintain-wiki": "maintain-wiki",
+  "pi-audit-bug": "audit-bug",
+  "pi-fix-dedupe": "fix-dedupe",
+  "pi-audit-security": "audit-security",
+  "pi-audit-perf": "audit-perf",
+  "pi-fix-dead": "fix-dead",
+  "pi-audit-deps": "audit-deps",
 }
 
 export default function (pi: ExtensionAPI) {
@@ -74,6 +68,7 @@ export default function (pi: ExtensionAPI) {
     }
     const command = activeCommand
     activeCommand = null
+    activeSkill = null
     if (!command) return
     let answer = ""
     for (let i = event.messages.length - 1; i >= 0; i--) {
@@ -115,7 +110,8 @@ export default function (pi: ExtensionAPI) {
             }
           }
           const prompt = loadSkillPrompt(skillName)
-          activeCommand = skillName
+          activeSkill = skillName
+          activeCommand = name
           step = 1
           const userMsg = args && typeof args === "string" && args.trim()
             ? `Run the ${skillName} skill. ${args.trim()}`
