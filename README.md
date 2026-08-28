@@ -48,7 +48,7 @@ See each module README for full `config.json` examples.
 
 - `pi-commandcode` — deleted 2026-06-02 (models migrated to `pi-qwencloud` where applicable).
 - `pi-memory` — removed 2026-06-04 (redundant with pi built-in wiki injection).
-- `pi-tools` `/comments` — removed 2026-08-15; merged into comment removal (`pi-fix-clean`).
+- `pi-tools` `/comments` — removed 2026-08-15; merged into comment removal (`pi-fix-remove-comments`).
 - `pi-tools` command names — 2026-08-17: `pi-{category}-{action}` prefix; see `pi-tools/README.md`.
 
 ---

@@ -42,27 +42,27 @@ function loadSkillPrompt(skillName: string): string {
 }
 
 const COMMAND_NAMES: Record<string, SkillName> = {
-  "pi-fix-clean": "fix-clean",
-  "pi-fix-format": "fix-format",
-  "pi-maintain-wiki": "maintain-wiki",
   "pi-audit-bug": "audit-bug",
-  "pi-fix-dedupe": "fix-dedupe",
+  "pi-audit-dependencies": "audit-deps",
+  "pi-audit-performance": "audit-perf",
   "pi-audit-security": "audit-security",
-  "pi-audit-perf": "audit-perf",
-  "pi-fix-dead": "fix-dead",
-  "pi-audit-deps": "audit-deps",
+  "pi-fix-dead-code": "fix-dead",
+  "pi-fix-deduplicate": "fix-dedupe",
+  "pi-fix-format": "fix-format",
+  "pi-fix-remove-comments": "fix-clean",
+  "pi-maintain-wiki": "maintain-wiki",
 }
 
 const COMMAND_DESCRIPTIONS: Record<string, string> = {
-  "pi-fix-clean": "Apaga comentários; guarda o essencial no wiki",
-  "pi-fix-format": "Formata código em blocos; não muda lógica",
-  "pi-maintain-wiki": "Alinha wiki com código; preserva histórico",
   "pi-audit-bug": "Bugs graves; corrige só com alta confiança",
-  "pi-fix-dedupe": "Unifica código repetido",
+  "pi-audit-dependencies": "CVEs npm; sugere bumps seguros",
+  "pi-audit-performance": "SQL, latência, memória, bundle",
   "pi-audit-security": "Auth, secrets, injection, erros na API",
-  "pi-audit-perf": "SQL, latência, memória, bundle",
-  "pi-fix-dead": "Remove código morto com prova",
-  "pi-audit-deps": "CVEs npm; sugere bumps seguros",
+  "pi-fix-dead-code": "Remove código morto com prova",
+  "pi-fix-deduplicate": "Unifica código repetido",
+  "pi-fix-format": "Formata código em blocos; não muda lógica",
+  "pi-fix-remove-comments": "Apaga comentários; guarda o essencial no wiki",
+  "pi-maintain-wiki": "Alinha wiki com código; preserva histórico",
 }
 
 export default function (pi: ExtensionAPI) {
