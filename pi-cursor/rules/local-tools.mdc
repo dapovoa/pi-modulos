@@ -1,0 +1,18 @@
+---
+description: "Local Cursor Agent tools vs cloud search; UI browser; dangerous shell policy (alwaysApply: true)"
+alwaysApply: true
+---
+
+## Local tools
+
+read, grep, glob and shell access the real files of this project. Use them to inspect the codebase.
+
+Cloud search cannot see local files. Do not use it to explore this project.
+
+Browser is available. For UI changes, open the running app and verify what the user sees. Do not stop at grep when they say they cannot see the change.
+
+## Dangerous shell
+
+Never run: git reset --hard, rm -rf, sudo, chmod 777, chown, dd, mkfs, fdisk, curl|sh, wget|sh, shutdown, reboot, poweroff, halt.
+
+git commit and git push: git-safety.mdc (ask first). These are policy. They are not a technical sandbox.

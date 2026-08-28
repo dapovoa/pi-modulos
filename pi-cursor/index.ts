@@ -632,35 +632,6 @@ const DANGEROUS_PATTERNS = [
 ]
 const HOOK_MATCHER = DANGEROUS_PATTERNS.map(s => s.replace(/\\b/g, "")).join("|")
 
-const PROJECT_MEMORY_MAX_CHARS = 2000
-const projectMemoryCache = new Map<string, { mtimeMs: number; text: string }>()
-
-function buildProjectMemoryBlock(cwd: string): string {
-  try {
-    const p = join(cwd, ".pi", "memory", "index.md")
-    const st = statSync(p)
-    const cached = projectMemoryCache.get(cwd)
-    if (cached && cached.mtimeMs === st.mtimeMs) return cached.text
-    const content = readFileSync(p, "utf8").slice(0, PROJECT_MEMORY_MAX_CHARS).trim()
-    const text = content
-      ? `[Project wiki index (.pi/memory/index.md — read log.md and pages/ for detail)]\n${content}\n\n`
-      : ""
-    projectMemoryCache.set(cwd, { mtimeMs: st.mtimeMs, text })
-    return text
-  } catch {
-    return ""
-  }
-}
-
-const LOCAL_TOOLS_GUIDANCE =
-  "[Environment & tool guidance]\n" +
-  "- Your read, grep, glob and shell tools access the REAL local files of this machine (this project's directory). Use them to inspect the codebase.\n" +
-  "- Cloud 'search' tools cannot see local files; do not rely on them to explore this project.\n" +
-  "- The .cursorignore exclusions (node_modules/, dist/, .astro/, .wrangler/, .firecrawl/, build output, generated files) are INTENTIONAL boundaries. The tools already respect them; do NOT bypass them with shell/rg to reach ignored directories. Only inspect source files the project owns.\n" +
-  "- Vendor or third-party code embedded in the project (files with a license header, 'extract from ... source', bundled/minified third-party code) is NOT ours to edit: inspect it but never modify it.\n" +
-  "- Policy: never run dangerous shell commands: git push/commit/reset --hard, rm -rf, sudo, chmod 777, chown, dd, mkfs, fdisk, curl|sh, wget|sh, shutdown/reboot/poweroff/halt. They are blocked.\n" +
-  "- If this project has .pi/memory/, it keeps a project wiki (index.md catalog, log.md history, pages/ topics) that you maintain: read .pi/memory/index.md for project memory, and REGISTER your findings there (log.md after any non-trivial task, pages for bugs/decisions) - never leave knowledge only in this conversation. But the REST of .pi/ is internal: never edit .pi/cursor-agents.json, .pi/pi-block-state.json, or .pi/agent/ (provider state, global config with credentials like auth.json). Only .pi/memory/ (the wiki) is yours to edit.\n\n"
-
 function genHookScript(): string {
   return `#!/bin/bash
 B=true;SF="";D="$PWD"
@@ -2267,18 +2238,13 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
         }
       }
 
-      let userText = text
-      if (agentIsFresh && userText) {
-        userText = LOCAL_TOOLS_GUIDANCE + buildProjectMemoryBlock(cwd) + userText
-      }
-
-      sendText = seedText ? seedText + userText : userText
+      sendText = seedText ? seedText + text : text
       piLog(
         "info",
         `send session=${sessionId.slice(0, 8)} model=${m.id} `
           + `agent=${(agentEntry?.agentId ?? "none").slice(0, 16)} `
           + `fresh=${agentIsFresh} seedChars=${seedText.length} `
-          + `guidance=${agentIsFresh && !!text}`,
+          + `guidance=false prepend=false`,
       )
 
       const result = await executeSendCycle({
