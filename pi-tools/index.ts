@@ -55,7 +55,7 @@ const COMMAND_NAMES: Record<string, SkillName> = {
 
 const COMMAND_DESCRIPTIONS: Record<string, string> = {
   "pi-audit-bug": "Bugs graves; corrige só com alta confiança",
-  "pi-audit-dependencies": "CVEs npm; sugere bumps seguros",
+  "pi-audit-dependencies": "CVEs npm; aplica patches seguros; reporta majors",
   "pi-audit-performance": "SQL, latência, memória, bundle",
   "pi-audit-security": "Auth, secrets, injection, erros na API",
   "pi-fix-dead-code": "Remove código morto com prova",

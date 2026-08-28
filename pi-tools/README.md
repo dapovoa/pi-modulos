@@ -60,7 +60,7 @@ Never edit the runtime extensions copy without syncing back to `pi-modulos/`.
 | Command | What it does |
 |---------|----------------|
 | `/pi-audit-bug` | High-severity correctness bugs |
-| `/pi-audit-dependencies` | Supply chain: npm audit, CVE report (advisory) |
+| `/pi-audit-dependencies` | Supply chain: audit, auto-apply safe patches, report majors |
 | `/pi-audit-performance` | SQL, latency, memory, bundle |
 | `/pi-audit-security` | Vulnerabilities, secrets, API error disclosure |
 | `/pi-fix-dead-code` | Dead code (proof before removal) |

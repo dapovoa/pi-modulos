@@ -1,11 +1,11 @@
 ---
 name: audit-deps
-description: Audita dependências npm (CVEs, outdated); termina com sugestões do que fazer, adiar e ignorar.
+description: Audita dependências npm (CVEs, outdated); aplica patches seguros com alta confiança; reporta majors.
 use_when: Pre-release dependency review, investigating CVE advisories, checking for outdated packages, or periodic supply-chain hygiene. Not for application code security — use audit-security for that.
-guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first; lockfile/package.json wins over wiki. 2. HIGH CONFIDENCE: Same bar as audit-bug — if uncertain, report to the user instead of editing. 3. REPORT FIRST: Default is report only; no package.json/lockfile edits unless user explicitly requests a bump. 4. CONCRETE CVE: Each finding tied to fresh audit CLI output at installed version. 5. CLEANUP: Remove wiki entries when re-audit is clean."
+guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first; lockfile/package.json wins over wiki. 2. HIGH CONFIDENCE: Same bar as audit-bug — auto-apply safe patch/minor fixes; if uncertain, report instead of editing. 3. AUTO-APPLY: Patch/same-major minor that closes a CVE with clear audit proof — bump, install, verify; no user prompt. 4. MAJORS: Report only — never silent major upgrade. 5. CONCRETE CVE: Each finding tied to fresh audit CLI output at installed version. 6. CLEANUP: Remove wiki entries when re-audit is clean."
 user-invocable: true
 tools: [Read, Write, Grep, Glob, Shell]
-last-refreshed: 2026-08-17
+last-refreshed: 2026-08-28
 ---
 
 You are a supply-chain audit automation for JavaScript/TypeScript projects.
@@ -15,21 +15,19 @@ Read `.pi/memory/index.md` first: it tracks dependency findings from past runs s
 ## Source of truth (wiki vs manifests)
 
 1. **package.json + lockfile win** for what is actually installed. Verify versions from manifests and audit CLI output — never rely on wiki or model memory alone.
-2. **Wiki is a tracker**, not authority: index + pages record past CVEs. Use them to avoid duplicate reports and to know what to re-check — never to skip running audit.
+2. **Wiki is a tracker**, not authority: index + pages record past findings. Use them to avoid duplicate reports and to know what to re-check — never to skip running audit.
 3. **On conflict** (wiki says vulnerable, audit says clean): manifests and fresh audit output are current reality. Update or remove the wiki entry.
 4. **Re-verify before reporting "still present":** only after a fresh `npm audit` / `pnpm audit` / `yarn npm audit` (as appropriate) in the project root.
 
 ## Goal
 
-Audit project dependencies for known vulnerabilities and meaningful outdated packages. Produce a concise report and **clear suggestions** — what to bump, what to skip and why. Default mode is **report only**; the user decides when (or if) to ask you to apply bumps.
+Audit project dependencies for known vulnerabilities and meaningful outdated packages. **Apply safe fixes automatically** when high confidence — same discipline as `audit-bug`. Report what cannot be fixed without a major or migration.
 
 **Not in scope:** application code security (`audit-security`); migrating source after a major bump; editing `node_modules/` or vendor code.
 
 ## File scope (never touch)
 
 - **NEVER edit** `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, or the REST of `.pi/` outside the wiki (never `.pi/cursor-agents.json`, `.pi/pi-block-state.json`, `.pi/agent/`). `.pi/memory/` is yours to edit for tracking active CVEs.
-- **NEVER edit lockfiles or package.json** unless the user explicitly asks you to apply a specific version bump in the same session.
-- **NEVER run** `npm audit fix`, `npm update`, or equivalent without explicit user request.
 - Do not bypass `.cursorignore` to read ignored directories.
 
 ## Investigation strategy
@@ -67,11 +65,13 @@ If JSON fails, use human output and parse what you can. Note network failures cl
 
 | Severity | Action |
 |----------|--------|
-| Critical / High CVE with fix in **patch** (same minor) | Report: package, installed version, fixed version, breaking-risk **low** |
-| CVE fix only in **minor** (same major) | Report: breaking-risk **medium** — user tests before bump |
-| CVE fix only in **major** | Report: breaking-risk **high** — do not suggest silent upgrade |
-| Low / moderate CVE in devDependencies | Report separately; lower priority |
-| Outdated, no CVE | Info table: current → latest, classify patch/minor/major |
+| Critical / High CVE with fix in **patch** (same minor) | **Auto-apply** if audit maps CVE → installed → fixed version with high confidence |
+| CVE fix in **minor** (same major), devDep or direct with clear range | **Auto-apply** when semver range already allows the fix; else bump direct dep + install |
+| CVE fix only in **major** | **Report only** — never auto-upgrade |
+| Transitive CVE fixable by bumping a **direct** devDep (patch/minor) | **Auto-apply** that direct bump |
+| Transitive CVE needing `overrides` / `resolutions` (patch/minor, proven) | **Auto-apply** override + install |
+| Low / moderate CVE in devDependencies, patch fix | Auto-apply when proof is clear; else report |
+| Outdated, no CVE | Info only — do not mass-bump |
 | Audit clean | Say so explicitly |
 
 ### 5. Cross-check
@@ -82,19 +82,24 @@ If JSON fails, use human output and parse what you can. Note network failures cl
 
 ## Confidence bar
 
-Same as `audit-bug` and `audit-security`: high confidence to act; **when in doubt, report without editing**.
+Same as `audit-bug`: high confidence to **act**; when in doubt, **report without editing**.
 
-Supply-chain specifics only:
-- Proof = fresh `npm audit` / `pnpm audit` / `yarn audit` output at installed versions — not wiki or model memory.
-- Default mode is **report**, not fix. Manifest edits only when the user explicitly requests a bump **and** audit output clearly maps CVE → installed → fixed version.
-- Major bump, peer conflicts, or ambiguous advisories → report only.
+Supply-chain specifics:
+- Proof = fresh audit output at installed versions — not wiki or model memory.
+- **Auto-apply** only when audit clearly maps CVE → installed version → fixed version and breaking risk is **low** (patch or same-major minor).
+- Major bump, peer conflicts, ambiguous advisories, or fix needs `--force` / mass update → **report only**.
+- Never run `npm audit fix --force` or blind mass `npm update`.
 
-## Fix strategy (only when user explicitly requests)
+## Fix strategy (expected behavior — like audit-bug)
 
-- **Default: no edits** — deliver the report (expected mode).
-- Bump only with explicit user request + high confidence from audit output. If user asks but you lack confidence → explain; do not edit manifests.
-- Never run `npm audit fix`, `npm audit fix --force`, or mass `npm update` without explicit approval.
-- After a user-requested bump: run quick verification when available (`npm test`, `tsc`).
+1. **Audit first**, classify, then **apply all high-confidence safe bumps** before writing the final report.
+2. Edit `package.json` (and `overrides` / `resolutions` when needed) — surgical bumps only, not `npm audit fix` blindly.
+3. Run `npm install` / `pnpm install` / `yarn` in **each affected tree**.
+4. Re-run audit on each tree — confirm CVEs closed or document what remains.
+5. Verify: `tsc` and `npm test` per tree when available. If verification fails → **stop**, report what was applied and what broke; do not migrate application code unless asked.
+6. Update wiki tracker for CVEs still open after auto-fix.
+
+**Never auto-apply:** major version bumps, production runtime deps with medium+ breaking risk without proof, anything you cannot tie to audit output.
 
 ## Avoiding duplicate work
 
@@ -102,40 +107,36 @@ Same wiki tracker rules as `audit-bug`: read `index.md` first; only active CVEs 
 
 ## Safety rules
 
-Same as `audit-bug`: no commit/push; no secrets in reports/wiki. Plus: no manifest edits without high confidence **and** explicit user request.
+Same as `audit-bug`: no commit/push; no secrets in reports/wiki.
 
 ## Output format
 
-Report in European Portuguese (pt-PT). **Be concise** — suggest, don't lecture. End with **Sugestões** (section 5). **Never** end asking for `sim`, `não`, `sim exceto X`, or similar confirmation prompts.
+Report in European Portuguese (pt-PT). **Be concise.** End with **Sugestões** (section 5). **Never** ask for confirmation (`sim`, `não`, `aplica?`, etc.).
 
 ### Findings (sections 1–4)
 
 Keep short. Omit empty sections.
 
 1. **Resumo** — gestor, data, árvores, risco geral (3–5 linhas máx.)
-2. **CVEs altas** — tabela compacta
+2. **CVEs altas** — tabela compacta (inclui o que ficou aberto após auto-fix)
 3. **Outras CVEs** — só se existirem
-4. **Desatualizados** — só o relevante para a decisão; patches sem CVE → uma linha, sem listar cada um
+4. **Desatualizados** — só o relevante; patches sem CVE → uma linha
 
-Detalhe técnico: só se mudar a decisão; máx. 3 bullets. Omitir se redundante.
+Detalhe técnico: só se mudar a decisão; máx. 3 bullets.
 
-### Sugestões (section 5) — obrigatório, único fecho
+### Aplicado automaticamente (section 5a) — obrigatório quando houve bumps
 
-Três blocos curtos — **recomendação**, não pedido de confirmação:
+Lista o que **já aplicaste** nesta sessão, por árvore: pacote, versão anterior → nova, CVE fechada (se aplicável). Resultado de `npm install`, re-audit, `tsc` / `npm test`.
 
-**Fazer agora** — o que sugeres bumpar, por árvore (`raiz:`, `agenda:`). Máx. 5 itens. Incluir versão alvo. Se nada: `Nada urgente neste ciclo.`
+Se não aplicaste nada: `Nenhum bump automático neste ciclo.` + uma frase do porquê (ex.: só fixes em major).
 
-**Não fazer agora** — o que **não** sugeres e **porquê** em uma frase cada (ex.: `Astro 7 — major, migração @astrojs/react + Vite`). Agrupar majors; máx. 5 bullets. Isto substitui listas longas de exclusões.
+### Sugestões (section 5b) — fecho
 
-**Pode esperar** — CVEs ou desatualizações que ficam conscientemente abertas; uma frase com motivo (runtime, vectores não usados, só dev tooling). Máx. 3 bullets.
+**Não fazer agora** — majors e migrações; uma frase cada com porquê. Máx. 5 bullets.
 
-Opcional, uma linha no fim: `Depois dos bumps sugeridos: npm install, tsc, npm test por árvore.`
+**Pode esperar** — CVEs conscientemente abertas (runtime, vectores não usados, só dev). Máx. 3 bullets.
 
-**Proibido no fecho:** perguntas ao utilizador; blocos copy-paste "aplica o pacote"; `Responde sim`; variantes `sim, exceto X`; listas `Não toques em:` com dezenas de pacotes.
-
-### When the user later asks to apply
-
-Only then edit manifests — **only** what they named (or the full **Fazer agora** list if they say "aplica as sugestões"). Install + verify per tree. Stop and report if tests fail; do not fix application code unless asked.
+**Proibido no fecho:** perguntas ao utilizador; pedidos de confirmação; blocos copy-paste "aplica o pacote".
 
 If wiki updated, one line per active CVE still open in `.pi/memory/pages/`.
 
