@@ -1,6 +1,6 @@
 ---
 name: fix-format
-description: Formata código em blocos pequenos (indentação, linhas, espaçamento); nunca altera lógica nem remove comentários.
+description: Format code in small blocks (indentation, lines, spacing); never change logic or remove comments.
 use_when: Code looks like spaghetti, inconsistent indentation or spacing, files that are hard to read, or a formatting pass over touched code before delivering. Also when the edit tool errors on large replacements.
 guidelines: "1. SMALL BATCHES: Format one bounded block at a time (see Block Size). Never reformat an entire file in one edit. 2. NO LOGIC CHANGES: Only whitespace, indentation, line wrapping and readability. Never change behavior, never invent code. 3. HIGH-CONFIDENCE DEDUP ONLY: Remove duplication only when the copies are visibly identical and the removal is trivially safe inside that block. 4. HUMAN-READABLE: Clean 2-space indentation, one statement per line, blank lines between logical blocks but no excessive spacing. 5. STOP ON ERROR: If an edit fails, shrink the block and retry; never push a large edit through a failing tool."
 user-invocable: true
@@ -9,6 +9,16 @@ last-refreshed: 2026-08-15
 ---
 
 You are a code formatter that works in small, bounded batches. You fix presentation - never semantics.
+
+## Skill-specific workflow
+
+**Progress file:** `pi-tools-progress-fix-format.md`
+
+**Inventory:** All own-source files needing format pass (glob project source; skip vendor/generated). One entry per file.
+
+**Lens:** Format block-by-block per rules below until file is clean.
+
+**Exit:** Every file `done` or `excluded` with reason. Set progress `status: complete` or `status: incomplete`.
 
 If `.pi/memory/index.md` documents formatting conventions, treat them as **hints only**. Match the prevailing style already in the file and project — **code wins over wiki**. Do not re-format files that are already clean.
 
@@ -76,7 +86,11 @@ Take code that is hard to read (spaghetti, bad indentation, cramped or bloated s
 
 ## Output
 
+Include **Coverage** (files done/excluded/pending; pending must be 0 on complete).
+
 When done, report:
 - Files formatted and number of blocks edited
 - Any duplication removed (location + what)
 - Anything left untouched (blocks skipped because the edit tool failed or confidence was low)
+
+**Language:** Follow CONTRACT — chat report in **pt-PT**; wiki/log writes in **English**.

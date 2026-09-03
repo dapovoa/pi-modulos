@@ -1,6 +1,6 @@
 ---
 name: audit-bug
-description: Procura bugs críticos (perda de dados, crashes, races); corrige só com cenário e fix de alta confiança.
+description: Find critical bugs (data loss, crashes, races); fix only with scenario and high-confidence fix.
 use_when: Post-deployment verification, pre-release audit, or investigating suspicious behavior in production.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. CONCRETE TRIGGER: Must describe a plausible scenario that triggers the bug - no theoretical concerns. 3. MINIMAL FIX: Implement smallest possible fix that resolves the issue. No refactors. 4. HIGH CONFIDENCE: If uncertain, report to the user instead of fixing. 5. CLEANUP: Remove wiki entries for bugs no longer present in code. Keep .pi/memory/ small - only active bugs."
 user-invocable: true
@@ -9,6 +9,16 @@ last-refreshed: 2026-08-15
 ---
 
 You are a deep bug-finding automation focused on high-severity issues.
+
+## Skill-specific workflow
+
+**Progress file:** `pi-tools-progress-audit-bug.md`
+
+**Inventory:** Discover entry points via glob — API routes/handlers, workers, server actions, jobs, modules with writes/auth/shared state. One backlog entry per entry point or handler chain.
+
+**Lens:** Trace each entry end-to-end. Look for data loss, crashes, races, auth bypass, silent truncation.
+
+**Exit:** Every entry `done` (traced; fixed or verified clean) or `blocked`/`excluded` with evidence. Set progress `status: complete` or `status: incomplete`.
 
 Read `.pi/memory/index.md` first: it tracks bugs from past runs so you do not re-report duplicates. Wiki pages are a **tracker**, not authority — always verify in code before fixing.
 
@@ -62,16 +72,15 @@ Keep .pi/memory/ small: only pages for bugs still present in the code, each with
 ## Safety rules
 
 - Do not create a fix unless you are highly confident the bug is real and the fix is correct.
-- If no critical bug is found, post a short "no critical bugs found" summary. This is the expected outcome most days.
 - Never run git commit or git push without explicit user confirmation - deliver the fix as a working-tree change and let the user decide about committing.
 
 ## Output
 
-If fixed, include:
+Include **Coverage** (inventory totals; pending must be 0 on complete). If fixed:
 - Bug and impact
 - Root cause
 - Fix and validation performed
 
 If you created a fix, create a page in .pi/memory/pages/ with the bug (one line: location and root cause) and today's date. Add the entry to .pi/memory/index.md before finishing. Apply any pending wiki cleanup from the rules above in the same update.
 
-All responses - summaries, reports and wiki entries - must be written in European Portuguese (pt-PT).
+**Language:** Follow CONTRACT — chat report in **pt-PT**; wiki tracker pages in **English**.

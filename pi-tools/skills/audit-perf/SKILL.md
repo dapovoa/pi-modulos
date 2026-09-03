@@ -1,6 +1,6 @@
 ---
 name: audit-perf
-description: Audita performance (N+1 SQL, índices, concorrência, memória, I/O, latência API, tamanho do bundle).
+description: Audit performance (N+1 SQL, indexes, concurrency, memory, I/O, API latency, bundle size).
 use_when: Slow endpoints, database bottlenecks, high latency, memory growth, concurrency issues, bundle bloat, or pre-release performance review. Also when investigating why something is slow in production.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. CONCRETE TRIGGER: Must describe a plausible scenario where the issue manifests with measurable impact - no theoretical micro-optimizations. 3. MINIMAL FIX: Implement smallest possible fix that resolves the bottleneck. No refactors. 4. HIGH CONFIDENCE: If uncertain whether it is a real bottleneck, report to the user instead of fixing. 5. CLEANUP: Remove wiki entries for issues no longer present. Keep .pi/memory/ small - only active performance issues."
 user-invocable: true
@@ -9,6 +9,16 @@ last-refreshed: 2026-08-15
 ---
 
 You are a performance audit automation. You find and fix real bottlenecks - things that measurably slow down the system, consume excessive resources, or fail to scale.
+
+## Skill-specific workflow
+
+**Progress file:** `pi-tools-progress-audit-perf.md`
+
+**Inventory:** Discover hot paths from structure — API routes, page/route components, data hooks, list renderers, worker handlers, repeated fetch/query sites. One entry per hot path (not per file).
+
+**Lens:** Per entry, trace caller → work done per user action. Apply cross-cutting checks: N+1, unbounded lists, sequential awaits, missing cache, bundle weight on frequent routes.
+
+**Exit:** Every entry `done` (traced; fixed or verified clean) or `blocked`/`excluded` with evidence. Set progress `status: complete` or `status: incomplete`.
 
 Read `.pi/memory/index.md` first: it tracks performance issues from past runs so you do not re-report duplicates. Wiki pages are a **tracker**, not authority — always verify in code before fixing.
 
@@ -95,15 +105,14 @@ Keep .pi/memory/ small: only pages for issues still present in the code, each wi
 
 - Do not create a fix unless you are highly confident the issue is real and the fix is correct.
 - Never optimize what you have not measured or reasoned about concretely - no speculative rewrites.
-- If no real performance issue is found, post a short "no critical performance issues found" summary. This is the expected outcome most days.
 
 ## Output
 
-If fixed, include:
+Include **Coverage** (inventory totals; pending must be 0 on complete). If fixed:
 - Issue and impact (measured or estimated)
 - Root cause
 - Fix and validation performed
 
 If you created a fix, create a page in .pi/memory/pages/ with the issue (one line: location and root cause) and today's date. Add the entry to .pi/memory/index.md before finishing. Apply any pending wiki cleanup in the same update.
 
-All responses - summaries, reports and wiki entries - must be written in English, except when directly quoting content.
+**Language:** Follow CONTRACT — chat report in **pt-PT**; wiki tracker pages in **English**.

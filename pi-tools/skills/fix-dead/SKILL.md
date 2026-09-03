@@ -1,6 +1,6 @@
 ---
 name: fix-dead
-description: Encontra e remove código morto (imports, exports, ficheiros órfãos) só com prova de não uso.
+description: Find and remove dead code (imports, exports, orphan files) only with proof of non-use.
 use_when: Suspicious that the codebase has unused imports, orphaned exports, unreferenced functions, unreachable code, dead branches, or files nobody imports. Also before a cleanup pass or when pruning a codebase.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. PROOF REQUIRED: 'Not referenced' must be proven with grep/glob across ALL files - a missing reference is not evidence until you have searched. 3. HIGH CONFIDENCE = REMOVE: when zero references are proven across the project AND no dynamic/config/entry/public-API reference exists, remove it - do not wait for confirmation. 4. REPORT ONLY WHEN UNCERTAIN: if reachability is doubtful (dynamic calls, string paths, public API, config references), report with evidence instead of removing. 5. CLEANUP: Remove wiki entries for dead code no longer present. Keep .pi/memory/ small - only active findings."
 user-invocable: true
@@ -9,6 +9,16 @@ last-refreshed: 2026-08-15
 ---
 
 You are a dead-code detection automation. You find code that nothing uses - and you prove it before anything is removed.
+
+## Skill-specific workflow
+
+**Progress file:** `pi-tools-progress-fix-dead.md`
+
+**Inventory:** Candidates — unused imports, orphan exports, unreferenced symbols, orphan files (discover via grep/glob). One entry per candidate.
+
+**Lens:** Full-project grep + dynamic/config/entry checks per candidate.
+
+**Exit:** Every candidate `done` (removed or verified live) or `blocked` (uncertain reachability with evidence). Set progress `status: complete` or `status: incomplete`.
 
 Read `.pi/memory/index.md` first: it tracks dead-code findings from past runs so you do not re-report duplicates. Wiki pages are a **tracker**, not authority — always verify in code before removing.
 
@@ -63,7 +73,7 @@ Identify code that is not referenced anywhere: unused imports, orphaned exports,
 
 ## Fix strategy (for provably dead code)
 
-- If you found something provably dead and the user confirmed (or confidence is absolute), remove it minimally.
+- Remove provably dead code with high confidence — do not wait for user confirmation.
 - Apply in SMALL EDITS: one bounded block per Edit (~30-40 lines max). If an Edit fails, shrink and retry.
 - Remove the import AND its now-unused references; remove orphan functions/files entirely.
 - After removal, verify: typecheck/build/tests still pass. A removal that breaks the build is not complete.
@@ -82,16 +92,15 @@ Keep .pi/memory/ small: only pages for dead code still present, each with the da
 ## Safety rules
 
 - Do not remove anything you have not proven unreferenced across the whole project.
-- Never remove code with uncertain reachability - report it instead.
-- If no dead code is found, post a short "no dead code found" summary. This is the expected outcome most days.
+- Never remove code with uncertain reachability - report it as `blocked` with evidence instead.
 
 ## Output
 
-If removed, include:
+Include **Coverage** (candidates done/blocked/pending; pending must be 0 on complete). If removed:
 - What was dead and the proof (where you searched, zero references)
 - Root cause (why it became dead - superseded, refactored away, never used)
 - Removal and validation (typecheck/build/tests)
 
 If reported only (uncertain reachability), list the candidates with evidence and why you did not remove them (dynamic reference, public API, config/entry point).
 
-All responses - summaries, reports and wiki entries - must be written in English, except when directly quoting content.
+**Language:** Follow CONTRACT — chat report in **pt-PT**; wiki tracker pages in **English**.

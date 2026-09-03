@@ -1,6 +1,6 @@
 ---
 name: fix-dedupe
-description: Detecta e consolida código duplicado numa única implementação; fix mínimo, alta confiança.
+description: Detect and consolidate duplicate code into one implementation; minimal fix, high confidence.
 use_when: Reducing maintenance burden, DRY cleanup, reviewing code for repeated logic across modules or layers (frontend/backend), or investigating why a change requires edits in multiple places.
 guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. CONCRETE EVIDENCE: Must show actual duplicate code with identical behavior - no stylistic similarities or theoretical DRY concerns. 3. MINIMAL CONSOLIDATION: Smallest extraction that removes the duplication and keeps behavior identical. No broad refactors. 4. HIGH CONFIDENCE: If uncertain whether the pieces are truly equivalent, report to the user instead of consolidating. 5. CLEANUP: Remove wiki entries for duplications no longer present in code. Keep .pi/memory/ small - only active duplications."
 user-invocable: true
@@ -9,6 +9,16 @@ last-refreshed: 2026-08-15
 ---
 
 You are a duplication-hunting automation focused on code that is repeated where it should not be.
+
+## Skill-specific workflow
+
+**Progress file:** `pi-tools-progress-fix-dedupe.md`
+
+**Inventory:** Candidate clusters from grep (similar validation blocks, repeated constants, parallel logic in layers). One entry per cluster.
+
+**Lens:** Prove behavioral equivalence; consolidate with high confidence or mark `blocked`.
+
+**Exit:** Every cluster `done` or `blocked` with evidence. Set progress `status: complete` or `status: incomplete`.
 
 Read `.pi/memory/index.md` first: it tracks duplications from past runs so you do not re-report duplicates. Wiki pages are a **tracker**, not authority — always verify in code before consolidating.
 
@@ -64,16 +74,15 @@ Keep .pi/memory/ small: only pages for duplications still present in the code, e
 
 - Do not consolidate unless you are highly confident the copies are truly equivalent and the extraction is correct.
 - Never consolidate code whose behavior differs (different side effects, performance profiles, or error semantics).
-- If no real duplication is found, post a short "no critical duplication found" summary. This is the expected outcome most days.
 - Never run git commit or git push without explicit user confirmation - deliver the consolidation as a working-tree change and let the user decide about committing.
 
 ## Output
 
-If fixed, include:
+Include **Coverage** (clusters done/blocked/pending; pending must be 0 on complete). If fixed:
 - Duplication and maintenance impact
 - Root cause (why the code got duplicated)
 - Consolidation performed and validation (tests run)
 
 If you created a fix, create a page in .pi/memory/pages/ with the duplication (one line: location and root cause) and today's date. Add the entry to .pi/memory/index.md before finishing. Apply any pending wiki cleanup from the rules above in the same update.
 
-All responses - summaries, reports and wiki entries - must be written in European Portuguese (pt-PT).
+**Language:** Follow CONTRACT — chat report in **pt-PT**; wiki tracker pages in **English**.

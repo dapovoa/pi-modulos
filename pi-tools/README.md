@@ -6,6 +6,13 @@ same pattern as `/commit` (pi-commit). Each skill has its own model in `config.j
 Commands use the **`pi-{category}-{action}`** prefix with **full words** (no abbreviations)
 so they group in autocomplete (`/pi`) and read clearly in the menu.
 
+All skills share **`skills/_shared/CONTRACT.md`** (injected into every prompt): inventory,
+backlog in `.pi/memory/pages/pi-tools-progress-{skill}.md`, full coverage before "clean",
+progress file reset on each invoke (proof of last run until next). Optional `resume` arg skips reset.
+
+**Language:** Skill prompts and contract in **English**; final chat report in **pt-PT**;
+wiki (`.pi/memory/`) writes in **English** for model consumption. Pi menu descriptions stay pt-PT.
+
 Note: `summerize` is NOT here — it serves the pi chat model via `/skill:summerize`
 (see APPEND_SYSTEM), so it stays in `.pi/agent/skills/` and is not a pi-tools command.
 
@@ -36,7 +43,7 @@ Never edit the runtime extensions copy without syncing back to `pi-modulos/`.
 
 ```json
 {
-  "fix-clean": "deepseek/deepseek-v4-flash",
+  "fix-clean": "deepseek/deepseek-v4-pro",
   "fix-format": "deepseek/deepseek-v4-flash",
   "maintain-wiki": "deepseek/deepseek-v4-flash",
   "audit-bug": "pi-cursor/grok-4.6",
@@ -50,7 +57,8 @@ Never edit the runtime extensions copy without syncing back to `pi-modulos/`.
 
 | Category | Commands | Model |
 |----------|----------|-------|
-| **fix** (mechanical) | `pi-fix-remove-comments`, `pi-fix-format` | `deepseek/deepseek-v4-flash` |
+| **fix** (mechanical) | `pi-fix-remove-comments` | `deepseek/deepseek-v4-pro` |
+| **fix** (mechanical) | `pi-fix-format` | `deepseek/deepseek-v4-flash` |
 | **fix** (technical) | `pi-fix-deduplicate`, `pi-fix-dead-code` | `pi-cursor/grok-4.6` |
 | **audit** | `pi-audit-bug`, `pi-audit-security`, `pi-audit-performance`, `pi-audit-dependencies` | `pi-cursor/grok-4.6` |
 | **maintain** | `pi-maintain-wiki` | `deepseek/deepseek-v4-flash` |
@@ -60,7 +68,7 @@ Never edit the runtime extensions copy without syncing back to `pi-modulos/`.
 | Command | What it does |
 |---------|----------------|
 | `/pi-audit-bug` | High-severity correctness bugs |
-| `/pi-audit-dependencies` | Supply chain: audit, auto-apply safe patches, report majors |
+| `/pi-audit-dependencies` | Gatekeeper CVE: audit + patches seguros; majors → migração à parte |
 | `/pi-audit-performance` | SQL, latency, memory, bundle |
 | `/pi-audit-security` | Vulnerabilities, secrets, API error disclosure |
 | `/pi-fix-dead-code` | Dead code (proof before removal) |

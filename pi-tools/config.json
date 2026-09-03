@@ -1,5 +1,5 @@
 {
-  "fix-clean": "deepseek/deepseek-v4-flash",
+  "fix-clean": "deepseek/deepseek-v4-pro",
   "fix-format": "deepseek/deepseek-v4-flash",
   "maintain-wiki": "deepseek/deepseek-v4-flash",
   "audit-bug": "pi-cursor/grok-4.6",

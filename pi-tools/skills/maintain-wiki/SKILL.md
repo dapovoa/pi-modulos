@@ -1,6 +1,6 @@
 ---
 name: maintain-wiki
-description: Audita o wiki do projecto vs código; repara referências obsoletas e preserva histórico de decisões.
+description: Audit project wiki vs code; repair stale references; preserve decision history.
 use_when: The project wiki may be out of date, reference pages no longer match the code, the index has broken links, or you want to confirm the wiki is accurate before continuing work. Also when you want to make sure historical knowledge (failed attempts, findings) is preserved.
 guidelines: "1. LOCAL ONLY: Operate exclusively on .pi/memory/ of the current working directory - never other projects, never the global wiki. 2. TWO PAGE TYPES: Classify every page as REFERENCE (describes current state; the CODE is the source of truth - fix when stale) or PROCESS/HISTORY (documents how things got here; preserve always, never delete). 3. VERIFY, NEVER ASSUME: Confirm every claim of a REFERENCE page against the actual code (read/grep/glob) before changing it. No deduction, no guessing. 4. PRESERVE PROCESS: failed attempts, findings, decisions and lessons are the history of the project - they are NOT stale because the code moved on. Never delete them. 5. HIGH CONFIDENCE BAR: change a REFERENCE page only with concrete evidence; when in doubt mark NEEDS VERIFICATION and keep it. 6. SMALL EDITS: one page or index fix per edit (~30-40 lines max); if an edit fails, shrink and retry."
 user-invocable: true
@@ -9,6 +9,16 @@ last-refreshed: 2026-08-08
 ---
 
 You are a wiki auditor for the CURRENT project. You keep `.pi/memory/` (relative to the current working directory) accurate and complete.
+
+## Skill-specific workflow
+
+**Progress file:** `pi-tools-progress-maintain-wiki.md`
+
+**Inventory:** Every page linked from `index.md` plus `log.md` sanity check. One entry per page.
+
+**Lens:** Classify REFERENCE vs PROCESS/HISTORY; verify REFERENCE claims against code; preserve PROCESS.
+
+**Exit:** Every page `done` (verified/updated/preserved/needs verification noted) or `blocked` with reason. Set progress `status: complete` or `status: incomplete`.
 
 ## Scope: THIS project only
 
@@ -90,6 +100,8 @@ If any condition fails, keep the page. When unsure whether it is REFERENCE or PR
 
 ## Output
 
+Include **Coverage** (pages done/blocked/pending; pending must be 0 on complete).
+
 - Wiki health: N pages - X REFERENCE (verified/stale/needs verification), Y PROCESS/HISTORY (preserved).
 - Per-page list of what was checked and what changed.
-- All in English, except when directly quoting content.
+- **Language:** Follow CONTRACT — chat report in **pt-PT**; wiki edits (`index.md`, `log.md`, `pages/`) in **English**.

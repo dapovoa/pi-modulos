@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs"
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
@@ -30,7 +30,15 @@ function loadSkillModel(skillName: string): string | null {
     const raw = readFileSync(CONFIG_PATH, "utf-8")
     const config = JSON.parse(raw)
     return config[skillName] || config.model || null
-  } catch { return null }
+  } catch {
+    return null
+  }
+}
+
+function loadSharedContract(): string {
+  const p = join(SKILLS_DIR, "_shared", "CONTRACT.md")
+  if (!existsSync(p)) return ""
+  return readFileSync(p, "utf-8").trim()
 }
 
 function loadSkillPrompt(skillName: string): string {
@@ -38,7 +46,55 @@ function loadSkillPrompt(skillName: string): string {
   if (!existsSync(p)) throw new Error(`Skill ${skillName} not found at ${p}`)
   const raw = readFileSync(p, "utf-8")
   const m = raw.match(/^---\n[\s\S]*?\n---\n\n?([\s\S]*)$/)
-  return m ? m[1].trim() : raw.trim()
+  const body = m ? m[1].trim() : raw.trim()
+  const contract = loadSharedContract()
+  if (!contract) return body
+  return `${contract}\n\n---\n\n${body}`
+}
+
+function progressFileRel(skillName: string): string {
+  return `.pi/memory/pages/pi-tools-progress-${skillName}.md`
+}
+
+function progressFilePath(cwd: string, skillName: string): string {
+  return join(cwd, progressFileRel(skillName))
+}
+
+function parseSkillArgs(args: string | undefined): { resume: boolean; rest: string } {
+  if (!args || typeof args !== "string") {
+    return { resume: false, rest: "" }
+  }
+  const trimmed = args.trim()
+  if (!trimmed) {
+    return { resume: false, rest: "" }
+  }
+  const lower = trimmed.toLowerCase()
+  if (lower === "resume") {
+    return { resume: true, rest: "" }
+  }
+  if (lower.startsWith("resume ")) {
+    return { resume: true, rest: trimmed.slice(7).trim() }
+  }
+  return { resume: false, rest: trimmed }
+}
+
+function resetProgressFile(cwd: string, skillName: string, command: string): void {
+  const path = progressFilePath(cwd, skillName)
+  mkdirSync(dirname(path), { recursive: true })
+  const started = new Date().toISOString()
+  const lines = [
+    `# pi-tools run — ${skillName}`,
+    "",
+    `command: /${command}`,
+    `started: ${started}`,
+    "status: in_progress",
+    "",
+    "## Backlog",
+    "",
+    "Format: `status | id | notes`",
+    "",
+  ]
+  writeFileSync(path, lines.join("\n"), "utf-8")
 }
 
 const COMMAND_NAMES: Record<string, SkillName> = {
@@ -54,14 +110,14 @@ const COMMAND_NAMES: Record<string, SkillName> = {
 }
 
 const COMMAND_DESCRIPTIONS: Record<string, string> = {
-  "pi-audit-bug": "Bugs graves; corrige só com alta confiança",
-  "pi-audit-dependencies": "CVEs npm; aplica patches seguros; reporta majors",
-  "pi-audit-performance": "SQL, latência, memória, bundle",
-  "pi-audit-security": "Auth, secrets, injection, erros na API",
+  "pi-audit-bug": "Bugs graves; inventário + traces; corrige com prova",
+  "pi-audit-dependencies": "Supply-chain: patches CVE auto; majors = migração",
+  "pi-audit-performance": "Perf: inventário + traces; corrige bottlenecks",
+  "pi-audit-security": "Segurança; fronteiras + cenário de exploit",
   "pi-fix-dead-code": "Remove código morto com prova",
   "pi-fix-deduplicate": "Unifica código repetido",
   "pi-fix-format": "Formata código em blocos; não muda lógica",
-  "pi-fix-remove-comments": "Apaga comentários; guarda o essencial no wiki",
+  "pi-fix-remove-comments": "Apaga comentários com precisão; why → wiki",
   "pi-maintain-wiki": "Alinha wiki com código; preserva histórico",
 }
 
@@ -88,8 +144,13 @@ export default function (pi: ExtensionAPI) {
       const msg = event.messages[i] as any
       const text = (Array.isArray(msg.content) ? msg.content : [])
         .filter((c: any) => c.type === "text")
-        .map((c: any) => c.text).join("").trim()
-      if (text) { answer = text; break }
+        .map((c: any) => c.text)
+        .join("")
+        .trim()
+      if (text) {
+        answer = text
+        break
+      }
     }
     if (!answer) {
       ctx.ui.notify(`/${command}: no output from model.`)
@@ -107,6 +168,16 @@ export default function (pi: ExtensionAPI) {
             ctx.ui.notify(`/${name}: waiting for agent to finish...`, "info")
             await ctx.waitForIdle()
           }
+          const { resume, rest } = parseSkillArgs(
+            args && typeof args === "string" ? args : undefined,
+          )
+          const rel = progressFileRel(skillName)
+          if (resume) {
+            ctx.ui.notify(`/${name}: resume — keeping ${rel}`, "info")
+          } else {
+            resetProgressFile(ctx.cwd, skillName, name)
+            ctx.ui.notify(`/${name}: reset ${rel}`, "info")
+          }
           const skillModelId = loadSkillModel(skillName)
           if (skillModelId) {
             const idx = skillModelId.indexOf("/")
@@ -116,7 +187,9 @@ export default function (pi: ExtensionAPI) {
             if (model) {
               previousModel = ctx.model
               const ok = await pi.setModel(model)
-              if (!ok) ctx.ui.notify(`${skillModelId} unavailable, using current.`, "warning")
+              if (!ok) {
+                ctx.ui.notify(`${skillModelId} unavailable, using current.`, "warning")
+              }
             } else {
               ctx.ui.notify(`Model "${skillModelId}" not found, using current.`, "warning")
             }
@@ -125,9 +198,10 @@ export default function (pi: ExtensionAPI) {
           activeSkill = skillName
           activeCommand = name
           step = 1
-          const userMsg = args && typeof args === "string" && args.trim()
-            ? `Run the ${skillName} skill. ${args.trim()}`
-            : `Run the ${skillName} skill.`
+          const tail = rest ? ` ${rest}` : ""
+          const userMsg = resume
+            ? `Run the ${skillName} skill (resume — progress file was not reset).${tail}`
+            : `Run the ${skillName} skill.${tail}`
           pi.sendMessage({ customType: `pi-tools-${skillName}`, content: prompt, display: false })
           pi.sendUserMessage(userMsg)
         } catch (e: any) {

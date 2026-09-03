@@ -51,6 +51,27 @@ const DANGEROUS = [
   /\b(shutdown|reboot|poweroff|halt)\b/,
 ]
 
+const SYS_PIP = [
+  /\b(?:pip|pip3)\s+(?:install|uninstall)\b/,
+  /\b(?:python|python3|py)\s+-m\s+pip\s+(?:install|uninstall)\b/,
+  /\b--break-system-packages\b/,
+]
+
+const MANAGED_PY_ENV = [
+  /\bVIRTUAL_ENV\s*=/,
+  /\bCONDA_PREFIX\s*=/,
+  /\bconda\s+(?:run|activate)\b/,
+  /(?:^|[\s;&|])(?:source|\.)\s+\S*\/bin\/activate\b/,
+  /(?:^|\/)(?:\.venv|\.env|venv|envs?)\/(?:[^/\s;&|]*\/)?bin\/(?:pip|pip3|python|python3)\b/,
+  /\b(?:poetry|uv)\s+run\b/,
+]
+
+function isSystemPip(cmd: string): boolean {
+  if (!SYS_PIP.some((re) => re.test(cmd))) return false
+  if (process.env.VIRTUAL_ENV || process.env.CONDA_PREFIX) return false
+  return !MANAGED_PY_ENV.some((re) => re.test(cmd))
+}
+
 function persist(pi: ExtensionAPI, cwd?: string) {
   pi.appendEntry(CUSTOM_TYPE, { blocked })
   if (cwd) writeStateFile(cwd)
@@ -95,13 +116,15 @@ export default function (pi: ExtensionAPI) {
     const trimmed = cmd.trim()
 
     const matched = DANGEROUS.find((re) => re.test(trimmed))
-    if (!matched) return
+    const pipSystem = matched ? false : isSystemPip(trimmed)
+    if (!matched && !pipSystem) return
 
     const short = trimmed.length > 80 ? trimmed.slice(0, 77) + "..." : trimmed
-    ctx.ui.notify(`Bloqueado: ${short}`, "warning")
+    const title = pipSystem ? "pip direto no sistema" : "Comando perigoso bloqueado"
+    ctx.ui.notify(`${title}: ${short}`, "warning")
 
-    const ok = await ctx.ui.confirm("Comando perigoso bloqueado", `Permitir "${short}"?`)
-    if (!ok) return { block: true, reason: "Bloqueado pelo pi-block" }
+    const ok = await ctx.ui.confirm(title, `Permitir "${short}"?`)
+    if (!ok) return { block: true, reason: pipSystem ? "pip fora de ambiente virtual" : "Bloqueado pelo pi-block" }
   })
 
   pi.registerCommand("unblock", {
