@@ -62,7 +62,7 @@ const MANAGED_PY_ENV = [
   /\bCONDA_PREFIX\s*=/,
   /\bconda\s+(?:run|activate)\b/,
   /(?:^|[\s;&|])(?:source|\.)\s+\S*\/bin\/activate\b/,
-  /(?:^|\/)(?:\.venv|\.env|venv|envs?)\/(?:[^/\s;&|]*\/)?bin\/(?:pip|pip3|python|python3)\b/,
+  /(?:^|[\/\s;&|(])(?:\.venv|\.env|venv|envs?)\/(?:[^/\s;&|]*\/)?bin\/(?:pip|pip3|python|python3)\b/,
   /\b(?:poetry|uv)\s+run\b/,
 ]
 
