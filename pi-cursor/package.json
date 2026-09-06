@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@cursor/sdk": "^1.0.30",
-    "@cursor/sdk-linux-x64": "^1.0.30"
+    "@cursor/sdk": "^1.0.31",
+    "@cursor/sdk-linux-x64": "^1.0.31"
   }
 }
