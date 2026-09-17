@@ -14,6 +14,20 @@ Unlike `audit-bug` / `audit-perf` (which edit application code), you work on **m
 
 **Not in scope:** application code (`audit-security`); major upgrades and post-bump code migration; mass `npm update` without CVE; devDep bumps with no advisory.
 
+## Binary execution (mandatory)
+
+This skill **runs commands and edits manifests**. A report without running audit is a **failed run**.
+
+| Step | MUST | Forbidden |
+|------|------|-----------|
+| Audit | Run `npm audit --json` (or pnpm/yarn equivalent) **in each tree** — every run | Report CVEs from memory or wiki without fresh CLI output |
+| Safe patch CVE | `fixAvailable.isSemVerMajor === false` → **Edit** `package.json` (or overrides), run install, **re-audit** | Stop at report when a patch fix exists |
+| Major-only CVE | No manifest edit → report **Nada acionável em manifests** with GHSA + installed version + major fix version from audit | `npm audit fix --force`; silent major bump |
+| Proof | `git diff` shows manifest/lockfile when bumps applied | Claim "Bumps aplicados" with empty `git diff` on manifests |
+| Complete | Every tree `done` with audit output cited | `complete` with zero audit commands run |
+
+**Zero manifest edits** is allowed **only** when fresh audit proves every open CVE needs a major/migration fix — cite each GHSA and `fixAvailable.version` from JSON.
+
 ## Skill-specific workflow
 
 **Progress file:** `pi-tools-progress-audit-deps.md`

@@ -1,106 +1,101 @@
 ---
 name: fix-clean
-description: Surgically remove comments; JSDoc and //; wiki-first for non-obvious why; never touch code.
-use_when: The user wants zero comments in own source code (frontend forbidden; backend also comment-free). Use for incremental tidy or full-repo purge.
-guidelines: "1. PROGRESS: pi-tools resets progress file on invoke — fill backlog before Edit. 2. INVENTORY: Grep real comments; one line per file with removable comments. 3. SURGICAL: Read each line in context — comment syntax only, never strings/regex/URLs/CSS. 4. DELETE: //, /* */, /** */ (incl. field JSDoc), # narrative — wiki-first for non-obvious why. 5. PRESERVE: license, /// reference, build placeholders, MSO email markup, vendor. 6. done only after per-file grep; excluded only with line proof. 7. Set status complete in progress file; never delete it."
+description: Remove all comments from project-owned source using a deterministic codemod; preserve functional pragmas; save non-obvious knowledge to the wiki before deleting.
+use_when: Zero comments in project-owned source (frontend and backend). Full repo or a given path.
+guidelines: "1. The codemod decides what is a comment — never grep for comment syntax yourself. 2. Read the dry-run BEFORE writing: knowledge worth keeping goes to log.md first. 3. Pragmas are kept by the script, not by your judgement. 4. Non-JS file types are yours to handle manually. 5. complete requires a final dry-run with zero removable comments."
 user-invocable: true
-tools: [Read, Edit, Write, Grep, Glob]
-last-refreshed: 2026-08-30
+tools: [Read, Edit, Write, Grep, Glob, Shell]
+last-refreshed: 2026-09-17
 ---
 
-You are a **surgical** comment-removal automation. Delete comment **syntax** only — never code, strings, or logic. Non-obvious knowledge moves to the wiki first.
+You remove **all** comments from project-owned source. Comment detection is **not your job** — a
+codemod does it with the TypeScript parser, so strings, regexes, templates, JSX text and URLs are
+never mistaken for comments. Your job is the part a parser cannot do: deciding what knowledge is
+worth saving before it is deleted, and handling file types the codemod does not parse.
 
-**Critical:** `/** ... */` on interface fields, types, functions, and exports **is a comment** in this project — remove it (wiki-first if it carries non-obvious why). Do **not** treat JSDoc as "documentation to keep". Do **not** mark a file `excluded` while removable `//` or `/**` lines remain.
+## The codemod
 
-## Skill-specific workflow
+```bash
+node {{SKILL_DIR}}/strip-comments.mjs [--write] [--json] <path...>
+```
 
-**Progress file:** `.pi/memory/pages/pi-tools-progress-fix-clean.md` — reset by pi-tools on each invoke; your work log until the next run.
+- Run it from the **project root** (it resolves the project's own `typescript`).
+- Without `--write` it is a **dry run**: it lists every comment it would remove and every comment it
+  keeps, with the rule id that kept it.
+- Handles `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`. Skips `node_modules`,
+  `dist`, `build`, `out`, `coverage`, `.git`, `.astro`, `.wrangler`, `.next`, `vendor`, and files
+  marked `@generated` / `auto-generated` / `do not edit`.
+- Keeps functional pragmas by rule: TS directives (`/// <reference`, `@ts-ignore`,
+  `@ts-expect-error`, `@ts-nocheck`), JSX pragmas (`@jsxImportSource`), linter and formatter
+  directives (`eslint-disable`, `prettier-ignore`, `biome-ignore`, `stylelint-disable`), coverage
+  markers (`istanbul ignore`), bundler hints (`@__PURE__`, `webpackChunkName`, `@vite-ignore`),
+  source maps, shebangs, and licence headers (`/*!`, `SPDX-License-Identifier`, `Copyright`).
+- **Do not second-guess the keep list.** If you believe a pragma is missing from it, say so in the
+  report and add it to `KEEP_RULES` in the script — do not delete the line by hand.
 
-**Inventory (grep first):**
+## Workflow
 
-1. Grep own source for comment candidates under `src/`, `worker/`, `scripts/`, `shared/`, root configs — exclude vendor, generated, ignored dirs.
-2. One backlog entry per file that still has **removable** comments after you read the matching lines.
-3. Do not inflate inventory with files where every hit is a false positive — but **do** list files like `worker/env.ts`, `pageLayout.ts`, `seed-local-data.ts` when they contain `/**` or `//` narrative.
+### Step 1 — Dry run and backlog
 
-**Lens:** Per file: read each hit in context → classify → wiki-first for non-obvious why → Edit comment lines only → grep-verify file.
+Run the codemod without `--write` over the target paths (whole repo when no path was given).
+Write the backlog into `.pi/memory/pages/pi-tools-progress-fix-clean.md`: one entry per file that
+has removable comments, with the count.
 
-**Exit:** Every entry `done` (edited + verified) or `excluded` (line-level proof). Set progress `status: complete` or `status: incomplete`.
+### Step 2 — Read before deleting
 
-## Progress lifecycle (mandatory)
+Go through the dry-run list. For any comment that records a **non-obvious workaround** — behaviour
+that is not visible in the code itself, a platform quirk, the reason an ugly line exists — append
+one line to `.pi/memory/log.md` in English before it disappears:
 
-| Phase | Action |
-|-------|--------|
-| Start | Progress file already reset — fill **Backlog** before the first Edit. |
-| During | After each file: `done` or `excluded` with short note. |
-| Complete | `pending` = 0 → set `status: complete` + Summary counts → report `Ficheiro de trabalho: ... (completo)`. |
-| Incomplete | Set `status: incomplete` → report `(incompleto, N pending)` → never claim repo clean |
+```
+YYYY-MM-DD clean: path:line — <fact>
+```
 
-**Forbidden:** Edit before backlog exists; `excluded` without reading the line; `done` without post-edit grep; deleting the progress file; adding progress to `index.md`.
+Obvious restatements (`/** Sender */` above `FROM_EMAIL`, `// today`) get no wiki entry.
+A comment naming an env var or repeating the function name is not knowledge.
 
-## Surgical removal (read before Edit)
+### Step 3 — Apply
 
-For **every** grep hit, read the full line (and neighbors) and classify:
+Run the codemod again with `--write` on the same paths. Mark each backlog entry `done` with the
+number of comments removed.
 
-| Class | Action | Examples |
-|-------|--------|----------|
-| **Removable comment** | Delete comment syntax only | `// Hoje — ...`, `/** R2 bucket ... */` on a field, `// error shown in summary` |
-| **False positive (code)** | `excluded` with line cite | `startsWith('//')`, `replace(/^\//`, `includes('://')`, `'*/*'` in headers, `GLOB 'FR DEMO/*'` in SQL strings |
-| **False positive (not comment)** | `excluded` | `#!/bin/bash`, `#root` in CSS selectors, shebangs |
-| **Preserve** | `excluded` | `/// <reference`, license header, `/*__PUSH_*__*/` in template strings, MSO `<!--[if !mso]-->`, vendor files |
+### Step 4 — File types the codemod does not parse
 
-**Never:**
+`.css`, `.scss`, `.py`, `.sh`, `.html`, `.astro`, `.vue`, `.svelte`, `.sql`, `.yml` are **yours**.
+Read each file and remove comments by hand, with the same principles:
 
-- Delete a line because it **contains** `//` or `/*` inside a **string** or regex.
-- Remove MS Outlook conditional HTML in email templates (functional markup, not narrative).
-- Edit `*.generated.ts` or other auto-generated files.
-- Strip commented-out **code** blocks without reading — if removing `//` from dead code would leave broken syntax, remove the whole dead statement carefully or mark `blocked` with reason.
+- Keep the same pragma classes (`stylelint-disable`, `# noqa`, `# type: ignore`, `# fmt: off`,
+  `<!-- prettier-ignore -->`, `#!` shebangs, licence headers).
+- Keep markup that only looks like a comment: `<!--[if !mso]-->` / `<!--<![endif]-->` conditionals
+  in e-mail templates, build placeholders inside strings or templates.
+- `#` is a comment in `.py`/`.sh`/`.yml`, never in `.css` — do not touch CSS ids or selectors.
+- One backlog entry per file, same `done` / `blocked` / `excluded` rules.
 
-**When uncertain** whether a line is comment vs code: read more context; if still uncertain, mark `blocked` and report — **do not** Edit.
+### Step 5 — Complete gate
 
-## What to delete (own code)
+`status: complete` requires **all** of:
 
-- `//` and `/* */` narrative lines.
-- `/** ... */` docblocks on fields, functions, types, exports (including `@deprecated` notes — move gist to wiki if needed).
-- Section banners, TODOs, FIXMEs, obvious restatements.
-- Commented-out code blocks (remove entire dead block, not half a line).
+- a final dry run over the same paths reporting **zero** removable comments in parsed file types;
+- every backlog entry `done`, `blocked`, or `excluded` with a reason;
+- for non-parsed file types, a read-based pass on each backlog file.
 
-## What to PRESERVE
+If a file is `blocked` (commented-out code you cannot safely delete, ambiguous markup), leave it
+with the line number and the reason. Do not force a partial edit.
 
-1. License headers / SPDX at file top.
-2. `/// <reference types="..." />` only.
-3. Build placeholders inside strings (e.g. `/*__PUSH_NOTIFICATION_DISPLAY__*/`).
-4. Auto-generated files — do not open for comment removal.
-5. Vendor / third-party (`public/vendor/`, license headers, bundled code).
-6. Functional email HTML conditionals (`<!--[if !mso]-->`, `<!--<![endif]-->`).
-7. Never touch: `node_modules/`, `dist/`, `build/`, `.git/`, lockfiles, `.pi/agent/`, etc.
+## Commented-out code
 
-## Wiki-first (non-obvious why only)
+The codemod removes the comment tokens it finds. A commented-out **block of dead code** is a
+different problem: delete the whole statement or block, not half of it. When the boundaries are not
+obvious, mark the file `blocked` with the line range instead of guessing.
 
-Before deleting a why-comment (workaround, SDK quirk, security note):
+## Output (pt-PT chat report)
 
-- `YYYY-MM-DD clean: <file>: <knowledge>` in `.pi/memory/log.md`, or a wiki page for large mappings.
-- Obvious section labels (`// Hoje`, `/** Remetente */` restating the field name) need no wiki — just delete.
+1. **Cobertura** — files in backlog; done / excluded / blocked / pending
+2. **Ações** — comments removed per file, split between codemod and manual pass
+3. **Prova** — final dry-run output (zero removable) and `git diff --stat`
+4. **Pragmas preservados** — what the keep list held back, by rule
+5. **Ficheiro de trabalho** — path + `completo` / `incompleto`
+6. **Wiki** — lines appended to `log.md`
+7. **Blocked** — files and reasons
 
-## How to delete (no ghost lines)
-
-1. Remove **only** comment tokens and the comment text — leave code tokens unchanged on the same line.
-2. If the line was **only** a comment, delete the whole line and collapse ghost blanks.
-3. One bounded block per Edit (~30-40 lines). Shrink on failure.
-
-## Verification (per file, required for `done`)
-
-After Edit on a file, grep that file for `//`, `/*`, `/**`, narrative `#`. Only preserve-category matches may remain. If removable comments remain, continue editing — do not mark `done`.
-
-## Output
-
-**Coverage:** inventory count; `done` / `excluded` / `blocked` / `pending` (pending must be 0 on complete).
-
-- **Ficheiro de trabalho** — path + `completo` / `incompleto`.
-- **Prova** — `git diff --stat` and every edited path (zero edits → line cite per `excluded` file).
-- **Files edited** — list every path with edits.
-- **Wiki** — entries added (if any).
-- **Blocked** — uncertain lines not touched.
-
-Delivered as working-tree changes only — never commit.
-
-**Language:** Follow CONTRACT — chat report in **pt-PT**; wiki/log writes in **English**.
+Never commit. Wiki and `log.md` in English per CONTRACT.

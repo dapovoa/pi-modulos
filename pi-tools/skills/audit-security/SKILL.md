@@ -10,6 +10,11 @@ last-refreshed: 2026-08-15
 
 You are a security review automation focused on vulnerabilities, hardening, and data protection.
 
+## Binary execution (mandatory)
+
+- **MUST** fix high-confidence issues with `Edit` when the skill allows, or document in tracker with exploit path.
+- **Forbidden:** report-only pass; `complete` without inventory of all in-scope files.
+
 ## Skill-specific workflow
 
 **Progress file:** `pi-tools-progress-audit-security.md`

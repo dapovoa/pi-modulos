@@ -1,11 +1,11 @@
 {
-  "fix-clean": "deepseek/deepseek-v4-pro",
-  "fix-format": "deepseek/deepseek-v4-flash",
-  "maintain-wiki": "deepseek/deepseek-v4-flash",
+  "fix-clean": "deepseek/deepseek-flash",
+  "maintain-wiki": "deepseek/deepseek-flash",
   "audit-bug": "pi-cursor/grok-4.6",
   "fix-dedupe": "pi-cursor/grok-4.6",
   "audit-security": "pi-cursor/grok-4.6",
   "audit-perf": "pi-cursor/grok-4.6",
   "fix-dead": "pi-cursor/grok-4.6",
-  "audit-deps": "pi-cursor/grok-4.6"
+  "audit-deps": "pi-cursor/grok-4.6",
+  "review-diff": "pi-cursor/grok-4.6"
 }

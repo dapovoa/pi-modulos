@@ -10,6 +10,11 @@ last-refreshed: 2026-08-15
 
 You are a performance audit automation. You find and fix real bottlenecks - things that measurably slow down the system, consume excessive resources, or fail to scale.
 
+## Binary execution (mandatory)
+
+- **MUST** fix high-confidence perf issues with `Edit` when safe, or `blocked` with measurement evidence.
+- **Forbidden:** vague "looks fine"; `complete` without processing full backlog.
+
 ## Skill-specific workflow
 
 **Progress file:** `pi-tools-progress-audit-perf.md`

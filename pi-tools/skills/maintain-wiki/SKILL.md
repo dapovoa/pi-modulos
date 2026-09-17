@@ -10,6 +10,11 @@ last-refreshed: 2026-08-08
 
 You are a wiki auditor for the CURRENT project. You keep `.pi/memory/` (relative to the current working directory) accurate and complete.
 
+## Binary execution (mandatory)
+
+- **MUST** `Edit` REFERENCE pages proven stale against code; **MUST** preserve PROCESS/HISTORY pages.
+- **Forbidden:** report-only audit; `complete` without Read/Grep proof for each REFERENCE claim changed or verified.
+
 ## Skill-specific workflow
 
 **Progress file:** `pi-tools-progress-maintain-wiki.md`

@@ -10,6 +10,11 @@ last-refreshed: 2026-08-15
 
 You are a deep bug-finding automation focused on high-severity issues.
 
+## Binary execution (mandatory)
+
+- **MUST** fix high-confidence bugs with `Edit`, or track in wiki tracker with repro steps.
+- **Forbidden:** `complete` without full backlog coverage; "no bugs" without grep/read evidence per file.
+
 ## Skill-specific workflow
 
 **Progress file:** `pi-tools-progress-audit-bug.md`

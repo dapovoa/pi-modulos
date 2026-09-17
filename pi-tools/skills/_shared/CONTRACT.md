@@ -1,6 +1,18 @@
 # Pi-tools skill contract (all skills)
 
-You are a **skill**, not a messenger. Complete the work systematically. Token or time limits are **never** a valid reason to stop early or declare success without coverage.
+You are a **skill**, not a messenger. Execute the work. A final report without the work is a **failed run**.
+
+## Binary rules (no ambiguity)
+
+1. **Fix skills edit files.** Audit skills run checks and apply safe fixes where the skill says so. A report alone is never success.
+2. **Closed lists only.** If the skill says PRESERVE or SKIP, only those exact cases stay untouched. Everything else in scope gets processed.
+3. **`excluded` needs proof:** file path + line number + exact line text + rule id (e.g. `PRESERVE-2`, `FALSE-4`). No file-wide `excluded` without per-line proof for every grep hit in that file.
+4. **`complete` is forbidden when:**
+   - any backlog entry is `pending` or `in_progress`;
+   - the skill is a fix skill, grep still finds work the skill must do, and you marked zero `done`;
+   - report counts disagree with the progress file Summary.
+5. **No soft language** in decisions: do not write "likely clean", "appears comment-free", "already clean", "nothing to do" without grep + read proof per file.
+6. **Never ask** the user to confirm the skill's core job (apply fix, remove comment, run audit, apply CVE patch).
 
 ## Progress file (work state — one file per skill, reset each run)
 
@@ -21,6 +33,15 @@ You are a **skill**, not a messenger. Complete the work systematically. Token or
 - **Never** use bash `rm` on the progress file — deletion is not part of this workflow.
 - **Finding trackers** (bugs, CVEs, `deps-cves.md`, etc.) are separate pages — keep those until the issue is gone from code/manifests. Do not store run backlog in tracker pages.
 
+## Independent verification (the extension checks you)
+
+After your run ends, `pi-tools` inspects the working tree itself and appends a **Verification** section to the progress file. You do not write that section and you cannot influence it.
+
+- It records how many source files and wiki files changed.
+- When source files changed, it runs the project's `typecheck` (or `tsc --noEmit`) and `test` scripts and records `pass` / `FAIL` per check.
+- A fix skill that claims work but leaves the working tree unchanged is visible there — so do not claim edits you did not make.
+- Your own report must not contradict it. Run the same checks yourself while working (you have `Shell`): a fix that breaks typecheck or tests is **not** `done` — either repair it or mark the entry `blocked`.
+
 ## Mandatory workflow
 
 ### 1. Inventory (from the repo only)
@@ -37,9 +58,9 @@ Process one backlog entry at a time to completion (trace, fix, format, verify, o
 
 ### 4. Evidence
 
-- **Audit skills:** concrete scenario (bug trigger, exploit path, bottleneck, CVE mapping).
-- **Fix skills:** proof of change (grep, diff, tests) or proof of exclusion (vendor, license, dynamic ref).
-- Grep alone is a **candidate**; trace or read is **evidence** for audits.
+- **Audit skills:** concrete scenario (bug trigger, exploit path, bottleneck, CVE mapping) **and** commands run (`npm audit`, etc.) when the skill requires them.
+- **Fix skills:** `Edit`/`Write` on source files **or** `blocked`/`excluded` with line proof — not a narrative-only report.
+- Grep alone is a **candidate**; read the line before `excluded`.
 
 ### 5. Exit criteria (only these)
 
@@ -48,20 +69,21 @@ Process one backlog entry at a time to completion (trace, fix, format, verify, o
 
 ## Forbidden
 
-- Declaring "no issues found" / "expected outcome most days" without full backlog coverage.
+- Declaring "no issues found" / "repo clean" / "zero removable" without full backlog coverage and skill-specific verification.
 - Stopping because the repo is large or the session is long — continue or leave explicit `pending` and `status: incomplete`.
-- Asking the user for confirmation to continue the skill's core work (fixes/audits the skill is designed to apply with high confidence).
+- Asking the user for confirmation to continue the skill's core work.
 - Logging scan notes or run history in finding tracker pages.
 - Deleting or `rm`-ing the progress file.
+- Marking `complete` on a fix skill with `done: 0` while removable items remain in scope (see skill-specific gates).
 
 ## Final report (always)
 
 1. **Coverage** — inventory size, done/blocked/excluded/pending (pending must be 0 on complete).
 2. **Actions** — what you fixed, removed, formatted, or audited with evidence.
-3. **Proof** — for skills that edit code: `git diff --stat` (or explicit file list if no git) and every edited path; for audit-only runs: evidence per finding. Zero edits requires line-level proof for each `excluded` item.
+3. **Proof** — `git diff --stat` and every edited path; zero code edits requires line-level proof for **every** grep hit in **every** backlog file.
 4. **Work file** — path to `pi-tools-progress-{skill-id}.md` and `completo` / `incompleto`.
 5. **Findings** — open issues tracked in `.pi/memory/pages/` when applicable (tracker pages, not the progress file).
-6. **Blocked** — what could not be finished and why (not token limits — concrete blocker).
+6. **Blocked** — what could not be finished and why (concrete blocker, not token limits).
 
 ## Language (all skills)
 

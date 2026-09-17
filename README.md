@@ -17,7 +17,7 @@ Agent dir defaults to `~/.pi/agent/` or `$PI_CODING_AGENT_DIR` when set (portabl
 |---|---|---|
 | [`pi-block`](pi-block/README.md) | Guard | Blocks dangerous shell commands and sensitive file reads (Cursor hooks + pi confirmations) |
 | [`pi-code`](pi-code/README.md) | Provider | Command Code API provider with git-aware context injection |
-| [`pi-commit`](pi-commit/README.md) | Tool | `/commit` and `/commit --public` — Conventional Commits from git diff (`config.json` model; default `deepseek/deepseek-v4-flash`) |
+| [`pi-commit`](pi-commit/README.md) | Tool | `/commit` and `/commit --public` — Conventional Commits from git diff (`config.json` model; default `deepseek/deepseek-flash`) |
 | [`pi-cursor`](pi-cursor/README.md) | Provider | Cursor SDK provider — agent sessions, hang detection, auto-retry, model catalog |
 | [`pi-kimi`](pi-kimi/README.md) | Provider | Moonshot Kimi API (streaming, thinking, tools) |
 | [`pi-mistral`](pi-mistral/README.md) | Provider + Tools | Mistral AI provider + `mistral_ocr` and `mistral_fim` tools |
@@ -38,7 +38,7 @@ Agent dir defaults to `~/.pi/agent/` or `$PI_CODING_AGENT_DIR` when set (portabl
 
 - **pi-commit** — single model in `pi-commit/config.json`. Use `/commit --public` when preparing commits for a public audience (message describes the outcome, not sanitization).
 - **pi-tools** — per-skill models in `pi-tools/config.json`; commands prefixed `pi-fix-`, `pi-audit-`, `pi-maintain-`:
-  - Mechanical: `fix-clean`, `fix-format`, `maintain-wiki` → `deepseek/deepseek-v4-flash`
+  - Mechanical: `fix-clean`, `fix-format`, `maintain-wiki` → `deepseek/deepseek-flash`
   - Technical: `audit-bug`, `fix-dedupe`, `audit-security`, `audit-perf`, `fix-dead`, `audit-deps` → `pi-cursor/grok-4.6`
 - **Providers** — enable models in `.pi/agent/settings.json` (`enabledModels`); auth in `.pi/agent/auth.json`.
 

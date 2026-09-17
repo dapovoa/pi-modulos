@@ -20,7 +20,7 @@ Use `--public` when the diff removes internal paths, bench notes, or other prep 
 `config.json`:
 
 ```json
-{ "model": "deepseek/deepseek-v4-flash" }
+{ "model": "deepseek/deepseek-flash" }
 ```
 
 If missing or the model is unavailable, `/commit` uses the current chat model.
