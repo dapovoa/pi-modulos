@@ -27,7 +27,12 @@ type ReviewScope = {
 type RunPhase = "idle" | "starting" | "running"
 
 type MessagePart = { type: string; text?: string }
-type SessionMessage = { role: string; content?: MessagePart[] }
+type SessionMessage = {
+  role: string
+  content?: MessagePart[]
+  stopReason?: string
+  errorMessage?: string
+}
 
 type VerificationCheck = {
   label: string
@@ -230,19 +235,62 @@ function appendVerificationSection(cwd: string, skillName: string, lines: string
   writeFileSync(path, `${current}${section.join("\n")}`, "utf-8")
 }
 
-function hasAssistantText(messages: readonly SessionMessage[]): boolean {
+function markProgressAborted(cwd: string, skillName: string, reason: string): void {
+  const path = progressFilePath(cwd, skillName)
+  if (!existsSync(path)) return
+  const current = readFileSync(path, "utf-8").replace(
+    /^status: in_progress$/m,
+    "status: incomplete",
+  )
+  writeFileSync(path, current, "utf-8")
+  appendVerificationSection(cwd, skillName, [
+    "result: aborted — the model never ran this skill",
+    reason,
+  ])
+}
+
+function lastAssistantMessage(messages: readonly SessionMessage[]): SessionMessage | null {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]
-    if (message.role !== "assistant") continue
-    const parts = Array.isArray(message.content) ? message.content : []
-    const text = parts
-      .filter((part) => part.type === "text")
-      .map((part) => part.text ?? "")
-      .join("")
-      .trim()
-    if (text) return true
+    if (messages[i].role === "assistant") {
+      return messages[i]
+    }
   }
-  return false
+  return null
+}
+
+function assistantText(message: SessionMessage): string {
+  const parts = Array.isArray(message.content) ? message.content : []
+  return parts
+    .filter((part) => part.type === "text")
+    .map((part) => part.text ?? "")
+    .join("")
+    .trim()
+}
+
+/**
+ * When the model never ran (quota, abort, empty reply), verification must not
+ * treat the working tree as a completed empty skill.
+ */
+function skillDidNotRun(messages: readonly SessionMessage[]): string | null {
+  const last = lastAssistantMessage(messages)
+  if (!last) {
+    return "skill did not run — the model produced no output. Retry the command."
+  }
+
+  const failed = last.stopReason === "error" || last.stopReason === "aborted"
+  if (failed) {
+    const detail = last.errorMessage?.trim()
+    if (detail) {
+      return `skill did not run — ${detail}`
+    }
+    return `skill did not run — model stopped (${last.stopReason}). Retry the command.`
+  }
+
+  if (!assistantText(last)) {
+    return "skill did not run — the model produced no output. Retry the command."
+  }
+
+  return null
 }
 
 function readPackageScripts(cwd: string): Record<string, string> {
@@ -764,9 +812,13 @@ export default function (pi: ExtensionAPI) {
     await restorePreviousModel()
     if (!command || !skillName) return
 
-    if (!hasAssistantText(event.messages as readonly SessionMessage[])) {
-      ctx.ui.notify(`/${command}: no output from model.`, "warning")
+    const aborted = skillDidNotRun(event.messages as readonly SessionMessage[])
+    if (aborted) {
+      markProgressAborted(ctx.cwd, skillName, aborted)
+      ctx.ui.notify(`/${command}: ${aborted}`, "error")
+      return
     }
+
     await verifyRun(pi, ctx, command, skillName, baseline)
   })
 

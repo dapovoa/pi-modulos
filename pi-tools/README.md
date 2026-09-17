@@ -44,6 +44,9 @@ progress-file reset.
 4. For `/pi-review`, the extension computes the file list and writes it as the
    backlog. The model only changes statuses.
 5. Send the prompt. Restore the previous model on `agent_end` **and** on error.
+   If the model stops with an error (quota, abort) or produces no text, the
+   extension reports that the skill did **not** run and skips verification —
+   an empty tree is not treated as a completed pass.
 
 `/pi-fix-format` skips steps 1–2 and 5: no prompt, no model.
 
