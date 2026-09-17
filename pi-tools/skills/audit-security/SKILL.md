@@ -1,120 +1,48 @@
 ---
 name: audit-security
-description: Audit code vulnerabilities (auth, injection, secrets, CORS, API error disclosure). Dependency CVEs → audit-deps.
-use_when: Security audit, pre-release hardening, reviewing auth/authz flows, checking for exposed secrets or misconfigurations, validating rate limiting, or investigating suspicious behavior in production.
-guidelines: "1. WIKI INDEX (tracker): Read .pi/memory/index.md first to avoid duplicate reports; CODE always wins over wiki. 2. CONCRETE EXPLOIT: Must describe a plausible attack scenario that reaches the vulnerability - no theoretical concerns. 3. MINIMAL FIX: Implement smallest possible fix that closes the hole. No refactors. 4. HIGH CONFIDENCE: If uncertain, report to the user instead of fixing. 5. CLEANUP: Remove wiki entries for vulnerabilities no longer present in code. Keep .pi/memory/ small - only active vulnerabilities."
-user-invocable: true
-tools: [Read, Write, Edit, Grep, Glob]
-last-refreshed: 2026-08-15
+description: Audit reachable vulnerabilities (authz, injection, secrets, CORS, error disclosure). Dependency advisories belong to audit-deps.
 ---
 
-You are a security review automation focused on vulnerabilities, hardening, and data protection.
+You find holes an attacker can actually reach: data exposure, privilege escalation, injection, credential leaks.
 
-## Binary execution (mandatory)
+## IN SCOPE
 
-- **MUST** fix high-confidence issues with `Edit` when the skill allows, or document in tracker with exploit path.
-- **Forbidden:** report-only pass; `complete` without inventory of all in-scope files.
+- Missing or broken authentication / authorisation (IDOR, unguarded privileged action)
+- Injection (SQL/NoSQL, command, XSS, template) with a reachable sink
+- Secrets in source, config committed to the tree, or logs
+- Permissive CORS, missing transport protections on sensitive routes
+- **Error disclosure:** exception text, SQL/vendor messages, or stacks reaching the client or UI
 
-## Skill-specific workflow
+## OUT OF SCOPE
 
-**Progress file:** `pi-tools-progress-audit-security.md`
+- Manifest CVEs and outdated packages → `audit-deps`
+- Crashes and data loss with no attacker → `audit-bug`
+- Theoretical hardening with no reachable path
 
-**Inventory:** Trust boundaries — each API route/handler, auth middleware, file upload, admin action, public form, error response path. Discover via glob; one entry per boundary.
+## Inventory
 
-**Lens:** Per entry, trace untrusted input → sink. Exploit scenario required before fix.
+Trust boundaries — each handler, auth gate, upload, admin action, public form, error-response path. Discover from the tree; one entry per boundary. Path arguments limit the search.
 
-**Exit:** Every entry `done` or `blocked`/`excluded` with evidence. Set progress `status: complete` or `status: incomplete`.
+## Lens
 
-Read `.pi/memory/index.md` first: it tracks vulnerabilities from past runs so you do not re-report duplicates. Wiki pages are a **tracker**, not authority — always verify in code before fixing.
+Per entry: untrusted input → sink. **Exploit scenario required** before a fix (who, how they reach it, what they get).
 
-## Source of truth (wiki vs code)
+### Error disclosure (every project, any stack)
 
-1. **CODE wins** for current behavior, existence, and fixes. Verify claims in the codebase (read/grep/glob) before editing code or concluding a vulnerability still exists.
-2. **Wiki is a tracker**, not authority: index + pages record past findings. Use them to avoid duplicate reports and to know what to re-check — never to skip code inspection.
-3. **On conflict** (wiki says X, code shows Y): code is current reality. Update or remove the wiki entry; do not change code to match stale wiki. If unclear, report the conflict to the user.
-4. **Re-verify before fix:** "Still present" only after you confirm it in code today. Absent from code → delete the wiki page; do not re-fix.
+Treat error responses as attack surface. **Do not assume a helper name.**
 
-## Goal
+1. Find how *this* project returns errors to clients (status + body, thrown HTTP error, framework error handler, UI toast/alert).
+2. Grep for what you found.
+3. Look for exception-derived values reaching it: `err.message`, `String(err)`, spreading the error object, a `.error` field from a driver or vendor SDK.
+4. Unhandled 5xx must be generic to the client; detail stays in server logs. 4xx may use curated handler strings, never raw exception or library text.
+5. UI must not show raw `err.message` or server `message` fields for 5xx. Prefer a single status→copy mapping with an explicit fallback.
 
-Audit the codebase for security vulnerabilities and hardening gaps. Only surface issues that an attacker could plausibly exploit: data exposure (including API error messages), privilege escalation, injection, or credential leaks.
+**Fix order when found:** centralise the client-facing helper first, then call sites, then backend routes that pass internals into the error path.
 
-## File scope (never touch)
+## Confidence
 
-- **NEVER touch** `node_modules/`, `dist/`, `build/`, `.astro/`, `.wrangler/`, `.next/`, `.firecrawl/`, generated files, `.git/`, lockfiles, or the REST of `.pi/` outside the wiki (never `.pi/cursor-agents.json`, `.pi/pi-block-state.json`, `.pi/agent/` - provider state, global config with credentials). `.pi/memory/` (the wiki) is yours to edit - register findings there. The tools already respect `.cursorignore` - do NOT bypass it with shell/rg to reach ignored directories.
-- **NEVER fix vendor or third-party code**, even inside `src/`: files with a license header, "extract from ... source", "Copyright ... Authors", bundled/minified third-party code. Report findings there to the user; do not edit.
+No plausible exploit path → no fix. Uncertain → report, do not edit. High confidence → smallest `Edit` that closes the hole. No refactors.
 
-## Investigation strategy
+## Complete
 
-- Focus on attack surface: endpoints and entry points, authentication/authorization boundaries, and anything that processes untrusted input.
-- Look for: IDOR and privilege escalation, missing auth guards on protected routes, SQL/NoSQL injection (unparameterized queries), XSS, command injection, hardcoded secrets, secrets in logs, permissive CORS, missing security headers, weak rate limiting, and **information disclosure via API/UI error messages**.
-- Dependency CVEs and outdated packages are **`audit-deps`** — not this skill.
-- Trace the full request path - don't pattern-match on a single line. Understand who can reach the vulnerable code and what data flows through it.
-- Ignore: theoretical concerns without a reachable attack path, low-severity hardening nits that merely reduce defense-in-depth, and style issues.
-
-### API error information disclosure
-
-Attackers and unauthenticated users can read anything returned in HTTP JSON bodies or shown in UI toasts/alerts. Treat error responses as part of the attack surface.
-
-**Backend — grep and review:**
-- `jsonError(.*err` / `catch` blocks that pass `err.message` or `String(err)` to clients
-- `jsonError(result.error` / `jsonError(.*\.error` where the value may come from DB, vendor APIs, or exceptions
-- Global `onError` / exception middleware: must return generic text for unhandled `5xx`; full detail only in server logs
-- `console.error` in responses (must never echo log output to the client)
-
-**Frontend — grep and review:**
-- Direct propagation: `err.message`, `error.message`, `toast.error(.*err`, `setError(.*err`, `ApiError ? err.message`
-- Helpers that prefer server `message` over status fallbacks (especially for `5xx`)
-- Missing central helper: per-component ad-hoc error display
-
-**Policy (fix toward this):**
-- `5xx`: client always sees a fixed generic message; server logs retain stack/vendor/SQL detail
-- `4xx`: only curated literal strings from route handlers — never raw exception or downstream library text
-- Frontend: status-based fixed copy via central helper; explicit per-call fallback; domain helpers (e.g. upload) when status mapping is not enough
-- Auth UX allowlists are OK only when strings are intentional, documented, and not derived from exceptions
-
-**Fix priority when found:**
-1. Central error helper (stop trusting server text for `5xx`)
-2. Backend routes passing internal errors to `jsonError`
-3. Frontend call sites using `err.message` directly
-
-## Confidence bar
-
-- You must be able to describe a concrete scenario in which an attacker reaches the vulnerability with a realistic impact.
-- If you cannot construct a plausible exploit path, do not create a fix.
-- When in doubt, report your findings to the user without creating a fix.
-
-## Fix strategy
-
-- If you find a real vulnerability, implement a minimal, high-confidence fix.
-- Apply the fix in SMALL EDITS: one bounded block per Edit (~30-40 lines max). If an Edit fails (context mismatch, tool error), shrink the block and retry - never push a large fix through a failing tool.
-- Security by default: deny, allow explicitly. Never expose secrets in fixes or suggestions.
-- Add or update tests when possible to lock in the mitigation.
-- After the fix, verify: run the relevant tests, typecheck or build before declaring it done. A fix that does not pass verification is not complete.
-- Avoid broad refactors in the same fix.
-
-## Avoiding duplicate work
-
-For each vulnerability you find, check .pi/memory/index.md and the corresponding page:
-
-- Vulnerability already tracked and still present in code: do NOT create another fix. Note in your summary that the vulnerability is already tracked.
-- Vulnerability already tracked but no longer present in code: delete the page and remove the entry from index.md. The vulnerability was fixed.
-- Vulnerability not tracked: proceed to fix and track it.
-
-Keep .pi/memory/ small: only pages for vulnerabilities still present in the code, each with the date it was recorded. Do not log run history or scan notes there.
-
-## Safety rules
-
-- Do not create a fix unless you are highly confident the vulnerability is real, reachable, and the fix is correct.
-- Never expose secrets in suggestions, diffs, or wiki pages.
-- Never run git commit or git push without explicit user confirmation - deliver the fix as a working-tree change and let the user decide about committing.
-
-## Output
-
-Include **Coverage** (inventory totals; pending must be 0 on complete). If fixed:
-- Vulnerability and impact
-- Root cause
-- Fix and validation performed
-
-If you created a fix, create a page in .pi/memory/pages/ with the vulnerability (one line: location and root cause) and today's date. Add the entry to .pi/memory/index.md before finishing. Apply any pending wiki cleanup from the rules above in the same update.
-
-**Language:** Follow CONTRACT — chat report in **pt-PT**; wiki tracker pages in **English**.
+Every entry `done` or `blocked`/`excluded` with evidence.

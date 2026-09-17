@@ -42,6 +42,12 @@ type ChangedFiles = {
 
 type ChangeSnapshot = Map<string, string>
 
+type ScriptCandidates = {
+  typecheck: string[]
+  test: string[]
+  format: string[]
+}
+
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url))
 const SKILLS_DIR = join(MODULE_DIR, "skills")
 const CONFIG_PATH = join(MODULE_DIR, "config.json")
@@ -51,10 +57,17 @@ const GIT_TIMEOUT_MS = 15_000
 const VERIFY_TIMEOUT_MS = 240_000
 const FAILURE_TAIL_LINES = 12
 
-const TYPECHECK_SCRIPTS = ["typecheck", "type-check"]
-const TEST_SCRIPTS = ["test", "test:unit"]
-const FORMAT_SCRIPTS = ["format", "fmt"]
 const FORMAT_TIMEOUT_MS = 180_000
+
+/**
+ * Conventional script names only. A project that names its scripts differently declares them
+ * under `scripts` in config.json — this list must not grow to accommodate one repository.
+ */
+const DEFAULT_SCRIPT_CANDIDATES: ScriptCandidates = {
+  typecheck: ["typecheck", "type-check"],
+  test: ["test"],
+  format: ["format", "fmt"],
+}
 
 const PRETTIER_CONFIG_FILES = [
   ".prettierrc",
@@ -71,16 +84,20 @@ const PRETTIER_CONFIG_FILES = [
 ]
 const BIOME_CONFIG_FILES = ["biome.json", "biome.jsonc"]
 
-/** Never put these in a review backlog: credentials and provider state, generated lockfiles, and
- *  the wiki (owned by maintain-wiki). Reviewing them leaks secrets or wastes the pass. */
-const REVIEW_EXCLUDED_PREFIXES = [".pi/agent/", ".pi/memory/"]
+/** Never put these in a review backlog: agent/provider state, wiki, and lockfiles. */
+const REVIEW_EXCLUDED_PREFIXES = [".pi/"]
 const REVIEW_EXCLUDED_FILES = [
-  ".pi/cursor-agents.json",
-  ".pi/pi-block-state.json",
   "package-lock.json",
   "pnpm-lock.yaml",
   "yarn.lock",
+  "bun.lock",
   "bun.lockb",
+  "Cargo.lock",
+  "poetry.lock",
+  "Pipfile.lock",
+  "go.sum",
+  "composer.lock",
+  "Gemfile.lock",
 ]
 
 function isReviewable(path: string): boolean {
@@ -95,14 +112,40 @@ let activeCommand: string | null = null
 let previousModel: Model<any> | null | undefined = null
 let baselineChanges: ChangeSnapshot | null = null
 
-function loadSkillModel(skillName: string): string | null {
+function readConfig(): Record<string, unknown> | null {
   try {
     if (!existsSync(CONFIG_PATH)) return null
-    const raw = readFileSync(CONFIG_PATH, "utf-8")
-    const config = JSON.parse(raw)
-    return config[skillName] || config.model || null
+    return JSON.parse(readFileSync(CONFIG_PATH, "utf-8")) as Record<string, unknown>
   } catch {
     return null
+  }
+}
+
+function loadSkillModel(skillName: string): string | null {
+  const config = readConfig()
+  if (!config) return null
+  const forSkill = config[skillName]
+  if (typeof forSkill === "string" && forSkill) return forSkill
+  const fallback = config.model
+  return typeof fallback === "string" && fallback ? fallback : null
+}
+
+function candidateList(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback
+  const names = value.filter((entry): entry is string => typeof entry === "string" && entry !== "")
+  return names.length > 0 ? names : fallback
+}
+
+/** Script names the project actually uses, so verification does not guess per-repo conventions. */
+function loadScriptCandidates(): ScriptCandidates {
+  const configured = readConfig()?.scripts
+  if (!configured || typeof configured !== "object") return DEFAULT_SCRIPT_CANDIDATES
+
+  const scripts = configured as Record<string, unknown>
+  return {
+    typecheck: candidateList(scripts.typecheck, DEFAULT_SCRIPT_CANDIDATES.typecheck),
+    test: candidateList(scripts.test, DEFAULT_SCRIPT_CANDIDATES.test),
+    format: candidateList(scripts.format, DEFAULT_SCRIPT_CANDIDATES.format),
   }
 }
 
@@ -220,9 +263,10 @@ function pickScript(scripts: Record<string, string>, candidates: string[]): stri
 
 function planVerification(cwd: string): VerificationCheck[] {
   const scripts = readPackageScripts(cwd)
+  const candidates = loadScriptCandidates()
   const checks: VerificationCheck[] = []
 
-  const typecheckScript = pickScript(scripts, TYPECHECK_SCRIPTS)
+  const typecheckScript = pickScript(scripts, candidates.typecheck)
   if (typecheckScript) {
     checks.push({
       label: `npm run ${typecheckScript}`,
@@ -237,7 +281,7 @@ function planVerification(cwd: string): VerificationCheck[] {
     })
   }
 
-  const testScript = pickScript(scripts, TEST_SCRIPTS)
+  const testScript = pickScript(scripts, candidates.test)
   if (testScript) {
     checks.push({
       label: `npm run ${testScript}`,
@@ -266,7 +310,7 @@ function hasPrettierConfig(cwd: string): boolean {
  */
 function planFormatting(cwd: string): VerificationCheck | null {
   const scripts = readPackageScripts(cwd)
-  const formatScript = pickScript(scripts, FORMAT_SCRIPTS)
+  const formatScript = pickScript(scripts, loadScriptCandidates().format)
   if (formatScript) {
     return {
       label: `npm run ${formatScript}`,
@@ -630,7 +674,7 @@ async function prepareLaunch(
   if (scope.excluded.length > 0) {
     lines.push(
       "",
-      "Excluded from review (credentials, provider state, lockfiles, wiki) — do not open them:",
+      "Excluded from review (.pi/ and lockfiles) — do not open them:",
       ...scope.excluded.map((path) => `- ${path}`),
     )
   }

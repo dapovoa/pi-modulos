@@ -16,17 +16,26 @@ const SOURCE_EXTENSIONS = new Set([
 
 const SKIP_DIRECTORIES = new Set([
   "node_modules",
+  "vendor",
   "dist",
   "build",
   "out",
   "coverage",
+  "target",
   ".git",
+  ".next",
+  ".nuxt",
   ".astro",
   ".wrangler",
-  ".next",
-  ".firecrawl",
   ".svelte-kit",
-  "vendor",
+  ".output",
+  ".turbo",
+  ".cache",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".tox",
+  ".mypy_cache",
 ])
 
 const GENERATED_MARKERS = [/@generated\b/, /auto-?generated/i, /do not edit/i]

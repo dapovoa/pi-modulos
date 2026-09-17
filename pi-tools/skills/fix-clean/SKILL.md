@@ -1,101 +1,83 @@
 ---
 name: fix-clean
-description: Remove all comments from project-owned source using a deterministic codemod; preserve functional pragmas; save non-obvious knowledge to the wiki before deleting.
-use_when: Zero comments in project-owned source (frontend and backend). Full repo or a given path.
-guidelines: "1. The codemod decides what is a comment — never grep for comment syntax yourself. 2. Read the dry-run BEFORE writing: knowledge worth keeping goes to log.md first. 3. Pragmas are kept by the script, not by your judgement. 4. Non-JS file types are yours to handle manually. 5. complete requires a final dry-run with zero removable comments."
-user-invocable: true
-tools: [Read, Edit, Write, Grep, Glob, Shell]
-last-refreshed: 2026-09-17
+description: Remove comments from project-owned source. A parser handles JS/TS; you save non-obvious knowledge and handle other file types.
 ---
 
-You remove **all** comments from project-owned source. Comment detection is **not your job** — a
-codemod does it with the TypeScript parser, so strings, regexes, templates, JSX text and URLs are
-never mistaken for comments. Your job is the part a parser cannot do: deciding what knowledge is
-worth saving before it is deleted, and handling file types the codemod does not parse.
+You remove **all comments** from project-owned source. Comment detection for JS/TS is **not your job** — the codemod uses the TypeScript parser, so strings, regexes, templates, JSX text and URLs are never mistaken for comments.
 
-## The codemod
+Your job: save knowledge a parser cannot judge, then handle file types the codemod does not parse.
 
-```bash
-node {{SKILL_DIR}}/strip-comments.mjs [--write] [--json] <path...>
-```
+## KEEP (closed — do not delete)
 
-- Run it from the **project root** (it resolves the project's own `typescript`).
-- Without `--write` it is a **dry run**: it lists every comment it would remove and every comment it
-  keeps, with the rule id that kept it.
-- Handles `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`. Skips `node_modules`,
-  `dist`, `build`, `out`, `coverage`, `.git`, `.astro`, `.wrangler`, `.next`, `vendor`, and files
-  marked `@generated` / `auto-generated` / `do not edit`.
-- Keeps functional pragmas by rule: TS directives (`/// <reference`, `@ts-ignore`,
-  `@ts-expect-error`, `@ts-nocheck`), JSX pragmas (`@jsxImportSource`), linter and formatter
-  directives (`eslint-disable`, `prettier-ignore`, `biome-ignore`, `stylelint-disable`), coverage
-  markers (`istanbul ignore`), bundler hints (`@__PURE__`, `webpackChunkName`, `@vite-ignore`),
-  source maps, shebangs, and licence headers (`/*!`, `SPDX-License-Identifier`, `Copyright`).
-- **Do not second-guess the keep list.** If you believe a pragma is missing from it, say so in the
-  report and add it to `KEEP_RULES` in the script — do not delete the line by hand.
+The codemod keeps these by rule id. Do not second-guess them. If a needed pragma is missing, report it and add a `KEEP_RULES` entry in the script — do not delete the line by hand.
+
+- shebang
+- TS directives and pragmas (`/// <reference`, `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`)
+- JSX pragmas (`@jsxImportSource`)
+- linter/formatter directives (eslint, stylelint, oxlint, biome, dprint, prettier)
+- coverage markers, bundler hints, source maps
+- licence headers (`/*!`, SPDX, Copyright)
+
+On file types you handle by hand, keep the same classes (`# noqa`, `# type: ignore`, `# fmt: off`, `<!-- prettier-ignore -->`, shebangs, licence headers) plus markup that only looks like a comment (`<!--[if !mso]-->` conditionals, build placeholders inside strings).
+
+## OUT OF SCOPE
+
+- File scope in the CONTRACT (install, build, generated, vendor, lockfiles, `.pi/` except `log.md` as below).
+- Code. If removing comment tokens would leave broken syntax, delete the whole dead statement or mark `blocked` with the line range. Do not guess.
+
+## Inventory
+
+Path arguments from the command are the target; otherwise the project root.
 
 ## Workflow
 
-### Step 1 — Dry run and backlog
+### 1 — Dry run
 
-Run the codemod without `--write` over the target paths (whole repo when no path was given).
-Write the backlog into `.pi/memory/pages/pi-tools-progress-fix-clean.md`: one entry per file that
-has removable comments, with the count.
+```bash
+node {{SKILL_DIR}}/strip-comments.mjs [--json] <path...>
+```
 
-### Step 2 — Read before deleting
+Run from the project root (it loads this project's `typescript`). One backlog entry per file with removable comments, with the count.
 
-Go through the dry-run list. For any comment that records a **non-obvious workaround** — behaviour
-that is not visible in the code itself, a platform quirk, the reason an ugly line exists — append
-one line to `.pi/memory/log.md` in English before it disappears:
+If `typescript` is not resolvable, skip the codemod: every JS/TS file in scope becomes a manual-pass entry. Do not invent a parser.
+
+### 2 — Knowledge first
+
+For a comment that records a **non-obvious workaround** (behaviour not visible in the code, a platform quirk, why an ugly line exists), append one English line to `.pi/memory/log.md` before it disappears:
 
 ```
 YYYY-MM-DD clean: path:line — <fact>
 ```
 
-Obvious restatements (`/** Sender */` above `FROM_EMAIL`, `// today`) get no wiki entry.
-A comment naming an env var or repeating the function name is not knowledge.
+Restatements (`/** Sender */` above `FROM_EMAIL`) get no wiki line.
 
-### Step 3 — Apply
+### 3 — Apply
 
-Run the codemod again with `--write` on the same paths. Mark each backlog entry `done` with the
-number of comments removed.
+```bash
+node {{SKILL_DIR}}/strip-comments.mjs --write <path...>
+```
 
-### Step 4 — File types the codemod does not parse
+Mark each parsed-file entry `done` with how many comments were removed.
 
-`.css`, `.scss`, `.py`, `.sh`, `.html`, `.astro`, `.vue`, `.svelte`, `.sql`, `.yml` are **yours**.
-Read each file and remove comments by hand, with the same principles:
+### 4 — File types the codemod does not parse
 
-- Keep the same pragma classes (`stylelint-disable`, `# noqa`, `# type: ignore`, `# fmt: off`,
-  `<!-- prettier-ignore -->`, `#!` shebangs, licence headers).
-- Keep markup that only looks like a comment: `<!--[if !mso]-->` / `<!--<![endif]-->` conditionals
-  in e-mail templates, build placeholders inside strings or templates.
-- `#` is a comment in `.py`/`.sh`/`.yml`, never in `.css` — do not touch CSS ids or selectors.
-- One backlog entry per file, same `done` / `blocked` / `excluded` rules.
+Anything not in `.ts` `.tsx` `.mts` `.cts` `.js` `.jsx` `.mjs` `.cjs` is yours: stylesheets, Python, shell, HTML, SQL, YAML, and any template/component format the tree uses.
 
-### Step 5 — Complete gate
+Read each file. Remove comments. Same KEEP rules. `#` is a comment in Python/shell/YAML, never in CSS — do not touch CSS ids or selectors.
 
-`status: complete` requires **all** of:
+One backlog entry per file.
 
-- a final dry run over the same paths reporting **zero** removable comments in parsed file types;
-- every backlog entry `done`, `blocked`, or `excluded` with a reason;
-- for non-parsed file types, a read-based pass on each backlog file.
+### 5 — Complete gate
 
-If a file is `blocked` (commented-out code you cannot safely delete, ambiguous markup), leave it
-with the line number and the reason. Do not force a partial edit.
+All of:
 
-## Commented-out code
+- final dry run on the same paths reports **zero** removable comments for parsed types (or every JS/TS file was a completed manual pass because typescript was missing);
+- every backlog entry `done`, `blocked`, or `excluded` with a KEEP/OUT rule;
+- each non-parsed backlog file was read.
 
-The codemod removes the comment tokens it finds. A commented-out **block of dead code** is a
-different problem: delete the whole statement or block, not half of it. When the boundaries are not
-obvious, mark the file `blocked` with the line range instead of guessing.
+## Output extras (pt-PT)
 
-## Output (pt-PT chat report)
-
-1. **Cobertura** — files in backlog; done / excluded / blocked / pending
-2. **Ações** — comments removed per file, split between codemod and manual pass
-3. **Prova** — final dry-run output (zero removable) and `git diff --stat`
-4. **Pragmas preservados** — what the keep list held back, by rule
-5. **Ficheiro de trabalho** — path + `completo` / `incompleto`
-6. **Wiki** — lines appended to `log.md`
-7. **Blocked** — files and reasons
-
-Never commit. Wiki and `log.md` in English per CONTRACT.
+- Split actions between codemod and manual pass.
+- List pragmas kept, by rule id.
+- Quote the final dry-run summary (zero removable).
+- Wiki lines appended to `log.md`.
