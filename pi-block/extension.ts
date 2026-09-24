@@ -26,9 +26,16 @@ const SENSITIVE_PATHS = [
   /\/private[_-]?keys?(\/|\.)/i,
 ]
 
+// Agent-only hard denies: the user commits and pushes. /unblock disables this
+// together with the rest of the guard for the session (escape hatch = "sem travar nada").
+const HARD_DENY: Array<{ re: RegExp; reason: string }> = [
+  { re: /\bgit\s+commit\b/, reason: "O commit pertence ao utilizador" },
+  { re: /\bgit\s+-C\s+\S+\s+commit\b/, reason: "O commit pertence ao utilizador" },
+  { re: /\bgit\s+push\b/, reason: "O push pertence ao utilizador" },
+  { re: /\bgit\s+-C\s+\S+\s+push\b/, reason: "O push pertence ao utilizador" },
+]
+
 const DANGEROUS = [
-  /\bgit\s+push\b/,
-  /\bgit\s+commit\b/,
   /\bgit\s+reset\s+--hard\b/,
   /\bgit\s+clean\b/,
   /\bgit\s+checkout\s+--\s+\./,
@@ -114,6 +121,16 @@ export default function (pi: ExtensionAPI) {
 
     const cmd = (event.input as { command?: string }).command ?? ""
     const trimmed = cmd.trim()
+
+    const hardDenied = HARD_DENY.find((entry) => entry.re.test(trimmed))
+    if (hardDenied) {
+      const short = trimmed.length > 80 ? trimmed.slice(0, 77) + "..." : trimmed
+      ctx.ui.notify(`Bloqueado pelo pi-block: ${short}`, "error")
+      return {
+        block: true,
+        reason: `${hardDenied.reason}. Pede ao utilizador para commitar (ou /unblock para autorizar nesta sessão).`,
+      }
+    }
 
     const matched = DANGEROUS.find((re) => re.test(trimmed))
     const pipSystem = matched ? false : isSystemPip(trimmed)

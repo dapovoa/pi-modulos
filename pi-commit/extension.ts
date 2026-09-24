@@ -98,6 +98,19 @@ function buildDiffPrompt(cwd: string): string {
   return out
 }
 
+function isGitRepo(cwd: string): boolean {
+  try {
+    const out = execSync("git rev-parse --is-inside-work-tree", {
+      cwd,
+      encoding: "utf-8",
+      stdio: "pipe",
+    })
+    return out.trim() === "true"
+  } catch {
+    return false
+  }
+}
+
 export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", (event) => {
     if (step !== 1) return
@@ -148,6 +161,10 @@ export default function (pi: ExtensionAPI) {
     description: "Generate Conventional Commit and apply",
     handler: async (args, ctx) => {
       const publicMode = isPublicMode(args)
+      if (!isGitRepo(ctx.cwd)) {
+        ctx.ui.notify("Not a git repository. Run /commit inside a repo.", "warning")
+        return
+      }
       try {
         ctx.modelRegistry.refresh()
         execSync("git add -A", { cwd: ctx.cwd, encoding: "utf-8", stdio: "pipe" })
