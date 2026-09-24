@@ -517,7 +517,11 @@ const AGENT_MAX_IDLE_MS = 60 * 60 * 1000
 const AGENT_HANG_TIMEOUT_MS = 10 * 60 * 1000
 
 interface CursorParam { id: string; value: string }
-const paramRegistry = new Map<string, { modelId: string; params?: CursorParam[] }>()
+const paramRegistry = new Map<string, {
+  modelId: string
+  params?: CursorParam[]
+  allowedValues?: Map<string, Set<string>>
+}>()
 
 interface AgentState { agents: Record<string, string> }
 
@@ -727,6 +731,7 @@ function hasVision(m: CursorModelEntry): boolean {
 function hasThinking(m: CursorModelEntry): boolean {
   const paramIds = new Set(m.parameters?.map(p => p.id) ?? [])
   return paramIds.has("thinking") || paramIds.has("reasoning")
+    || paramIds.has("reasoning_effort") || paramIds.has("effort")
 }
 
 function ctxWindow(m: CursorModelEntry, p: CursorParam[]): number {
@@ -778,34 +783,86 @@ function modelCost(id: string): { input: number; output: number; cacheRead: numb
   if (id.startsWith("composer-")) return { input: 3, output: 15, cacheRead: 0.30, cacheWrite: 3.75 }
   if (id.startsWith("gpt-")) return { input: 2.50, output: 10, cacheRead: 0.50, cacheWrite: 1.25 }
   if (id.startsWith("gemini-")) return { input: 1.25, output: 5, cacheRead: 0.10, cacheWrite: 0.30 }
-  if (id.startsWith("grok-")) return { input: 2, output: 10, cacheRead: 0.20, cacheWrite: 0.50 }
+  if (id.startsWith("grok-")) return { input: 2, output: 6, cacheRead: 0.50, cacheWrite: 0 }
   return { input: 2, output: 10, cacheRead: 0.20, cacheWrite: 0.50 }
 }
 
-const THINKING_EFFORT_MAP: Record<string, string> = {
-  minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh",
-}
-const REASONING_EFFORT_MAP: Record<string, string> = {
-  minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "extra-high",
+const PI_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"]
+const EFFORT_ORDER = ["minimal", "low", "medium", "high", "xhigh", "extra-high", "max"]
+
+// Map a pi thinking level onto the values the model actually accepts. Exact
+// match first, then the xhigh/extra-high synonym, then clamp to the nearest
+// allowed level below (or above when nothing below exists). Avoids sending
+// values the Cursor backend rejects with "Invalid parameters for registry
+// model" (e.g. xhigh on models whose effort list stops at high).
+function resolveEffortValue(requested: string, allowed?: Set<string>): string {
+  const level = PI_THINKING_LEVELS.includes(requested) ? requested : "medium"
+  if (!allowed || allowed.size === 0) {
+    if (level === "minimal") return "low"
+    if (level === "xhigh" || level === "max") return "high"
+    return level
+  }
+
+  const candidates = level === "xhigh" ? ["xhigh", "extra-high"] : [level]
+  for (const candidate of candidates) {
+    if (allowed.has(candidate)) return candidate
+  }
+
+  const requestedIdx = EFFORT_ORDER.indexOf(level)
+  let below: string | undefined
+  let belowIdx = -1
+  let above: string | undefined
+  let aboveIdx = Number.POSITIVE_INFINITY
+  for (const value of allowed) {
+    const idx = EFFORT_ORDER.indexOf(value)
+    if (idx < 0) continue
+    if (idx <= requestedIdx && idx > belowIdx) {
+      below = value
+      belowIdx = idx
+    }
+    if (idx > requestedIdx && idx < aboveIdx) {
+      above = value
+      aboveIdx = idx
+    }
+  }
+  return below ?? above ?? level
 }
 
-function applyThinking(pid: string, def: CursorParam[], lvl?: string): CursorParam[] {
+function applyThinking(
+  pid: string,
+  def: CursorParam[],
+  lvl?: string,
+  allowed?: Map<string, Set<string>>,
+): CursorParam[] {
   if (!lvl) return def
-  const mode = def.some(p => p.id === "thinking") ? "thinking" :
-               def.some(p => p.id === "reasoning") ? "reasoning" : null
-  if (!mode) return def
+  const has = (id: string) => def.some(p => p.id === id)
 
-  if (mode === "thinking") {
+  if (has("thinking")) {
     return def.map(p => {
       if (p.id === "thinking") return { id: "thinking", value: "true" }
-      if (p.id === "effort") return { id: "effort", value: THINKING_EFFORT_MAP[lvl] || "medium" }
+      if (p.id === "effort") {
+        return { id: "effort", value: resolveEffortValue(lvl, allowed?.get("effort")) }
+      }
       return p
     })
   }
 
-  return def.map(p =>
-    p.id === "reasoning" ? { id: "reasoning", value: REASONING_EFFORT_MAP[lvl] || "medium" } : p
-  )
+  if (has("reasoning")) {
+    const value = resolveEffortValue(lvl, allowed?.get("reasoning"))
+    return def.map(p => p.id === "reasoning" ? { id: "reasoning", value } : p)
+  }
+
+  if (has("reasoning_effort")) {
+    const value = resolveEffortValue(lvl, allowed?.get("reasoning_effort"))
+    return def.map(p => p.id === "reasoning_effort" ? { id: "reasoning_effort", value } : p)
+  }
+
+  if (has("effort")) {
+    const value = resolveEffortValue(lvl, allowed?.get("effort"))
+    return def.map(p => p.id === "effort" ? { id: "effort", value } : p)
+  }
+
+  return def
 }
 
 const SDK_OUTPUT_NOISE = /Working\.\.\.|LocalCursorRulesService|AgentSkillsCursorRulesService|CursorPluginsAgentSkillsService|load completed(?:\s+meta=|\b)|\d{2}:\d{2}:\d{2}\.\d{3}\s+INFO\s|\[shell-exec\]|[\u2800-\u28FF]/
@@ -1551,8 +1608,24 @@ export default async function (pi: ExtensionAPI) {
       finalP = defP.map(p => p.id === "fast" ? { id: "fast", value: "false" } : p)
       flippedFast.push(cm.id)
     }
+    // Cursor's catalog defaults grok-4.7 to context=500k, but the agent
+    // backend rejects every run carrying that value with "Invalid parameters
+    // for registry model" (verified 2026-09-21). 256k is accepted; clamp
+    // until the catalog and runtime agree. See wiki [[cursor-provider]].
+    if (cm.id === "grok-4.7" && finalP.some(p => p.id === "context" && p.value === "500k")) {
+      finalP = finalP.map(p => p.id === "context" ? { id: "context", value: "256k" } : p)
+    }
     if (cm.id === "default") continue
-    paramRegistry.set(cm.id, { modelId: cm.id, params: finalP.length ? finalP : undefined })
+    const allowedValues = new Map<string, Set<string>>()
+    for (const param of cm.parameters ?? []) {
+      if (!param.values?.length) continue
+      allowedValues.set(param.id, new Set(param.values.map(v => v.value)))
+    }
+    paramRegistry.set(cm.id, {
+      modelId: cm.id,
+      params: finalP.length ? finalP : undefined,
+      allowedValues: allowedValues.size ? allowedValues : undefined,
+    })
   }
   if (flippedFast.length) {
     piLog("info", `Forced fast=false on ${flippedFast.length} model(s) whose default variant had fast=true: ${flippedFast.join(", ")}`)
@@ -1569,7 +1642,7 @@ export default async function (pi: ExtensionAPI) {
         reasoning: hasThinking(cm),
         input: hasVision(cm) ? ["text" as const, "image" as const] : ["text" as const],
         cost,
-        contextWindow: ctxWindow(cm, defV.params ?? []),
+        contextWindow: ctxWindow(cm, paramRegistry.get(cm.id)?.params ?? defV.params ?? []),
         maxTokens: maxTok(cm),
       }
     })
@@ -1987,7 +2060,7 @@ function cursorStream(m: Model<Api>, ctx: Context, o?: SimpleStreamOptions): Ass
 
       const entry = paramRegistry.get(m.id) ?? { modelId: m.id, params: undefined }
       const effectiveParams = entry.params && o?.reasoning
-        ? applyThinking(entry.modelId, entry.params, o.reasoning)
+        ? applyThinking(entry.modelId, entry.params, o.reasoning, entry.allowedValues)
         : entry.params
       modelSel = { id: entry.modelId }
       if (effectiveParams?.length) modelSel.params = effectiveParams
