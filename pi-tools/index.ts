@@ -6,6 +6,7 @@ import type { Model } from "@earendil-works/pi-ai"
 
 type SkillName =
   | "fix-clean"
+  | "fix-format"
   | "maintain-wiki"
   | "audit-bug"
   | "fix-dedupe"
@@ -356,7 +357,7 @@ function hasPrettierConfig(cwd: string): boolean {
  * Only formatters the project has configured. Running prettier with default settings on a project
  * that never adopted it rewrites every file, which is a decision for the user, not for a command.
  */
-function planFormatting(cwd: string): VerificationCheck | null {
+function planFormatting(cwd: string, paths: string[] = []): VerificationCheck | null {
   const scripts = readPackageScripts(cwd)
   const formatScript = pickScript(scripts, loadScriptCandidates().format)
   if (formatScript) {
@@ -366,21 +367,62 @@ function planFormatting(cwd: string): VerificationCheck | null {
       args: ["run", "--silent", formatScript],
     }
   }
+
+  const targets = paths.length > 0 ? paths : ["."]
   if (hasPrettierConfig(cwd)) {
     return {
-      label: "prettier --write .",
+      label: `prettier --write ${targets.join(" ")}`,
       command: "npx",
-      args: ["--no-install", "prettier", "--write", "."],
+      args: ["--no-install", "prettier", "--write", ...targets],
     }
   }
   if (BIOME_CONFIG_FILES.some((name) => existsSync(join(cwd, name)))) {
     return {
-      label: "biome format --write .",
+      label: `biome format --write ${targets.join(" ")}`,
       command: "npx",
-      args: ["--no-install", "biome", "format", "--write", "."],
+      args: ["--no-install", "biome", "format", "--write", ...targets],
     }
   }
   return null
+}
+
+async function applyProjectFormatter(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  rest: string,
+): Promise<{ note: string } | { error: string }> {
+  const paths = rest.split(/\s+/).filter((token) => token.length > 0)
+  const check = planFormatting(ctx.cwd, paths)
+  if (!check) {
+    return {
+      note:
+        "No project formatter configured. You own indent, wrapping, quotes, " +
+        "AND the structural rules.",
+    }
+  }
+
+  ctx.ui.setStatus(STATUS_KEY, `pi-fix-format: ${check.label}`)
+  try {
+    const result = await pi
+      .exec(check.command, check.args, { cwd: ctx.cwd, timeout: FORMAT_TIMEOUT_MS })
+      .catch(() => undefined)
+
+    if (!result || result.code !== 0) {
+      const detail = result
+        ? tailLines(result.stderr || result.stdout).join("\n")
+        : "could not start"
+      return { error: `${check.label} failed.\n${detail}` }
+    }
+
+    ctx.ui.notify(`/pi-fix-format: ${check.label} — done. Structural pass next.`, "info")
+    return {
+      note:
+        `The extension already ran \`${check.label}\`. Do not redo indent, wrapping, ` +
+        "or quotes. Only the structural rules the formatter does not apply.",
+    }
+  } finally {
+    ctx.ui.setStatus(STATUS_KEY, undefined)
+  }
 }
 
 type NumstatEntry = { added: string; deleted: string; path: string }
@@ -741,6 +783,7 @@ const COMMAND_NAMES: Record<string, SkillName> = {
   "pi-audit-security": "audit-security",
   "pi-fix-dead-code": "fix-dead",
   "pi-fix-deduplicate": "fix-dedupe",
+  "pi-fix-format": "fix-format",
   "pi-fix-remove-comments": "fix-clean",
   "pi-maintain-wiki": "maintain-wiki",
   "pi-review": "review-diff",
@@ -753,12 +796,11 @@ const COMMAND_DESCRIPTIONS: Record<string, string> = {
   "pi-audit-security": "Segurança; fronteiras + cenário de exploit",
   "pi-fix-dead-code": "Remove código morto com prova",
   "pi-fix-deduplicate": "Unifica código repetido",
+  "pi-fix-format": "Estilo estrutural; formatador do projeto primeiro se existir",
   "pi-fix-remove-comments": "Apaga comentários com precisão; why → wiki",
   "pi-maintain-wiki": "Alinha wiki com código; preserva histórico",
   "pi-review": "Revê só o que mudou (bug, segurança, perf, duplicação)",
 }
-
-const FORMAT_COMMAND = "pi-fix-format"
 
 export default function (pi: ExtensionAPI) {
   async function restorePreviousModel(): Promise<void> {
@@ -822,46 +864,6 @@ export default function (pi: ExtensionAPI) {
     await verifyRun(pi, ctx, command, skillName, baseline)
   })
 
-  pi.registerCommand(FORMAT_COMMAND, {
-    description: "Corre o formatador configurado do projeto (sem modelo)",
-    handler: async (_args, ctx) => {
-      const check = planFormatting(ctx.cwd)
-      if (!check) {
-        ctx.ui.notify(
-          `/${FORMAT_COMMAND}: no formatter configured. Add prettier or biome (and a "format" ` +
-            "script) — adopting one rewrites every file, so that is your call, not this command's.",
-          "warning",
-        )
-        return
-      }
-
-      const before = await snapshotChanges(pi, ctx.cwd)
-      ctx.ui.setStatus(STATUS_KEY, `${FORMAT_COMMAND}: ${check.label}`)
-      try {
-        const result = await pi
-          .exec(check.command, check.args, { cwd: ctx.cwd, timeout: FORMAT_TIMEOUT_MS })
-          .catch(() => undefined)
-
-        if (!result || result.code !== 0) {
-          const detail = result ? tailLines(result.stderr || result.stdout).join("\n") : "could not start"
-          ctx.ui.notify(`/${FORMAT_COMMAND}: ${check.label} failed.\n${detail}`, "error")
-          return
-        }
-
-        const touched = splitTouchedPaths(before, await snapshotChanges(pi, ctx.cwd))
-        const count = touched.source.length + touched.wiki.length
-        ctx.ui.notify(
-          count === 0
-            ? `/${FORMAT_COMMAND}: ${check.label} — already formatted.`
-            : `/${FORMAT_COMMAND}: ${check.label} — reformatted ${count} file(s).`,
-          "info",
-        )
-      } finally {
-        ctx.ui.setStatus(STATUS_KEY, undefined)
-      }
-    },
-  })
-
   for (const [name, skillName] of Object.entries(COMMAND_NAMES)) {
     pi.registerCommand(name, {
       description: COMMAND_DESCRIPTIONS[name] ?? skillName,
@@ -894,14 +896,27 @@ export default function (pi: ExtensionAPI) {
           }
 
           baselineChanges = await snapshotChanges(pi, ctx.cwd)
+
+          let context = launch.context
+          if (skillName === "fix-format" && !resume) {
+            const formatted = await applyProjectFormatter(pi, ctx, rest)
+            if ("error" in formatted) {
+              resetRunState()
+              markProgressAborted(ctx.cwd, skillName, `formatter failed: ${formatted.error}`)
+              ctx.ui.notify(`/${name}: ${formatted.error}`, "error")
+              return
+            }
+            context = `${context}\n\n${formatted.note}`
+          }
+
           await applySkillModel(ctx, skillName)
 
           activeSkill = skillName
           activeCommand = name
           runPhase = "starting"
           const userMsg = resume
-            ? `Run the ${skillName} skill (resume — progress file was not reset).${launch.context}`
-            : `Run the ${skillName} skill.${launch.context}`
+            ? `Run the ${skillName} skill (resume — progress file was not reset).${context}`
+            : `Run the ${skillName} skill.${context}`
           pi.sendMessage({
             customType: `pi-tools-${skillName}`,
             content: prompt,

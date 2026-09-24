@@ -28,7 +28,7 @@ One issue has one owner. If another skill could claim it, this table wins. The o
 | The same logic living in two places | `fix-dedupe` |
 | Unreferenced code or files | `fix-dead` |
 | Comments | `fix-clean` |
-| Formatting / whitespace | `/pi-fix-format` (no model) |
+| Formatting / structural style | `fix-format` |
 | Advisories in package manifests and lockfiles | `audit-deps` |
 | Wiki vs code | `maintain-wiki` |
 | Those judgement lenses, but only on a **diff** | `review-diff` |

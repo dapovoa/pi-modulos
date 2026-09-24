@@ -1,5 +1,6 @@
 {
   "fix-clean": "deepseek/deepseek-flash",
+  "fix-format": "deepseek/deepseek-flash",
   "maintain-wiki": "deepseek/deepseek-flash",
   "audit-bug": "pi-cursor/grok-4.6",
   "fix-dedupe": "pi-cursor/grok-4.6",

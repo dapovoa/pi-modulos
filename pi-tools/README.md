@@ -29,7 +29,7 @@ growing defaults in this extension.
 | `/pi-fix-dead-code` | `fix-dead` | Remove code proven unused |
 | `/pi-fix-deduplicate` | `fix-dedupe` | One implementation where two exist |
 | `/pi-fix-remove-comments [path...]` | `fix-clean` | Remove comments (parser for JS/TS) |
-| `/pi-fix-format` | _(none)_ | Run the project's formatter; no model |
+| `/pi-fix-format [path...]` | `fix-format` | Structural style (deepseek-flash); project formatter first if present |
 | `/pi-maintain-wiki` | `maintain-wiki` | Wiki vs code in this cwd |
 
 Ownership of overlapping concerns is a table in `CONTRACT.md`. Path arguments
@@ -43,12 +43,12 @@ progress-file reset.
 3. Reset `.pi/memory/pages/pi-tools-progress-{skill}.md` unless `resume`.
 4. For `/pi-review`, the extension computes the file list and writes it as the
    backlog. The model only changes statuses.
-5. Send the prompt. Restore the previous model on `agent_end` **and** on error.
+5. For `/pi-fix-format` (unless `resume`), the extension runs the project's
+   formatter if one is configured, then starts the model.
+6. Send the prompt. Restore the previous model on `agent_end` **and** on error.
    If the model stops with an error (quota, abort) or produces no text, the
    extension reports that the skill did **not** run and skips verification —
    an empty tree is not treated as a completed pass.
-
-`/pi-fix-format` skips steps 1–2 and 5: no prompt, no model.
 
 ## Independent verification
 
@@ -96,17 +96,16 @@ Never put in a review backlog: anything under `.pi/`, and lockfiles.
 
 ## `/pi-fix-format`
 
-Runs a formatter **this project already configured**:
+Skill `fix-format` on `deepseek/deepseek-flash`. Closed structural rules (braces,
+one statement per line, no chained ternaries, wrap long conditions without
+breaking short-circuit). Never changes behaviour.
 
-1. `format` or `fmt` npm script (or the `scripts.format` override);
-2. else Prettier, if a Prettier config file or a `prettier` key in package.json
-   exists;
-3. else Biome, if `biome.json` / `biome.jsonc` exists.
+If this project already has a formatter, the extension runs it **first** (same
+detection as before: `format`/`fmt` script, else Prettier config, else Biome).
+The model is told not to redo indent/wrapping/quotes. With **no** formatter the
+model owns those too — it does not adopt Prettier for the project.
 
-With none of those it **refuses**. Adopting a formatter rewrites the tree; that
-is the user's decision. It does not invent style rules the formatter does not
-implement (braces on `if`, splitting boolean chains, function length). Those
-are out of this command.
+A formatter that fails aborts the command; the model does not start.
 
 ## `/pi-fix-remove-comments`
 
@@ -127,6 +126,7 @@ node skills/fix-clean/strip-comments.mjs --json src
 ```json
 {
   "fix-clean": "deepseek/deepseek-flash",
+  "fix-format": "deepseek/deepseek-flash",
   "maintain-wiki": "deepseek/deepseek-flash",
   "audit-bug": "pi-cursor/grok-4.6",
   "fix-dedupe": "pi-cursor/grok-4.6",
@@ -155,4 +155,4 @@ no vision-exp.
 | 2026-08-16 | kebab two-word | `/strip-comments`, `/bug-hunt` |
 | 2026-08-17 | `pi-{category}-{action}` | `/pi-fix-clean`, `/pi-audit-deps` |
 | 2026-08-28 | full words, no abbrev | `/pi-fix-remove-comments` |
-| 2026-09-17 | `/pi-review`; `/pi-fix-format` has no model | |
+| 2026-09-17 | `/pi-review`; `/pi-fix-format` briefly model-free, then restored as skill + optional formatter | |
